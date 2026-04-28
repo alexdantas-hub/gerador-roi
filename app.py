@@ -88,7 +88,8 @@ if file_meta and file_adx:
                 'ROI': '{:.2%}'
             }).map(color_negative_red, subset=['Lucro', 'ROI']), # .map substitui .applymap
             use_container_width=True,
-            height=450
+            height=450,
+            hide_index=True
         )
 
         # 3. Exportação Excel

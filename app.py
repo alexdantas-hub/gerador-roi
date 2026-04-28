@@ -4,28 +4,24 @@ from io import BytesIO
 from datetime import datetime
 from openpyxl.styles import Font, Alignment, PatternFill
 
-# Configuração da página para ocupar melhor o espaço
 st.set_page_config(page_title="ROI Analyzer Premium", layout="wide")
 
-# CSS para tornar a interface web moderna e limpa
+# CSS para interface moderna
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .stButton>button { background-color: #2c3e50; color: white; border-radius: 8px; width: 100%; font-weight: bold; }
     .stDownloadButton>button { background-color: #27ae60; color: white; border-radius: 8px; width: 100%; font-weight: bold; }
-    .css-12w0qpk { padding: 2rem 1rem; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("📊 Dashboard de Performance ROI")
 st.markdown("---")
 
-# Barra lateral para configurações
 st.sidebar.header("Configurações")
 cambio = st.sidebar.number_input("Cotação do Dólar (R$)", value=5.00, step=0.10)
 
-# Área de Upload
 col_u1, col_u2 = st.columns(2)
 with col_u1:
     file_meta = st.file_uploader("📁 Arquivo Meta Ads (Gastos)", type=["csv"])
@@ -40,7 +36,7 @@ def clean_campaign_name(name):
 
 if file_meta and file_adx:
     try:
-        # Processamento idêntico ao anterior
+        # Processamento
         df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8')
         df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8')
         
@@ -59,11 +55,8 @@ if file_meta and file_adx:
         merged['ROI'] = (merged['Lucro'] / merged['Investimento'])
         merged = merged.sort_values('ROI', ascending=False)
 
-        # --- EXIBIÇÃO DO DASHBOARD EM TELA ---
-        
-        # 1. Métricas de Resumo (Cards)
-        tot_inv = merged['Investimento'].sum()
-        tot_rec = merged['Receita'].sum()
+        # 1. Cards de Resumo
+        tot_inv, tot_rec = merged['Investimento'].sum(), merged['Receita'].sum()
         tot_luc = tot_rec - tot_inv
         tot_roi = (tot_luc / tot_inv) if tot_inv > 0 else 0
 
@@ -76,16 +69,15 @@ if file_meta and file_adx:
 
         st.markdown("---")
 
-        # 2. Tabela de Dados Estilizada para Web
+        # 2. Tabela de Detalhamento (Correção do Erro de Estilização)
         st.subheader("📋 Detalhamento por Campanha")
         
-        # Formatando o DataFrame apenas para exibição visual
         df_display = merged[['Campanha', 'Investimento', 'Receita', 'Lucro', 'ROI']].copy()
         df_display['Campanha'] = df_display['Campanha'].str.upper()
-        
-        # Aplicando cores condicionais na visualização web
-        def color_roi(val):
-            color = '#27ae60' if val > 0 else '#c0392b'
+
+        # Nova forma de aplicar cores (Compatível com Pandas recente)
+        def color_negative_red(val):
+            color = '#c0392b' if val < 0 else '#27ae60'
             return f'color: {color}; font-weight: bold'
 
         st.dataframe(
@@ -94,14 +86,13 @@ if file_meta and file_adx:
                 'Receita': 'R$ {:,.2f}',
                 'Lucro': 'R$ {:,.2f}',
                 'ROI': '{:.2%}'
-            }).applymap(color_roi, subset=['Lucro', 'ROI']),
+            }).map(color_negative_red, subset=['Lucro', 'ROI']), # .map substitui .applymap
             use_container_width=True,
-            height=400
+            height=450
         )
 
-        # 3. Botão de Download (Mantendo a formatação Excel idêntica ao PDF)
-        st.markdown("### 📥 Exportar")
-        
+        # 3. Exportação Excel
+        st.markdown("---")
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_ex = df_display.copy()
@@ -111,7 +102,7 @@ if file_meta and file_adx:
             ws = writer.sheets['ROI']
             azul, vermelho, verde, cinza = "2C3E50", "C0392B", "27AE60", "7F8C8D"
             
-            # Cabeçalho da Planilha (as 3 linhas que você pediu)
+            # Cabeçalho idêntico ao solicitado anteriormente
             ws.merge_cells('A1:E1')
             ws['A1'] = "Relatório de ROI por Campanha"
             ws['A1'].font = Font(name='Arial', bold=True, size=18, color=azul)
@@ -137,12 +128,17 @@ if file_meta and file_adx:
                 ws[f'C{r}'].number_format = '"R$" #,##0.00'
                 ws[f'D{r}'].number_format = '"R$" #,##0.00'
                 ws[f'E{r}'].number_format = '0.00%'
-            
+                
+                # Cores no Excel
+                if ws[f'D{r}'].value and ws[f'D{r}'].value < 0: ws[f'D{r}'].font = Font(color=vermelho, bold=True)
+                if ws[f'E{r}'].value and ws[f'E{r}'].value < 0: ws[f'E{r}'].font = Font(color=vermelho, bold=True)
+                elif ws[f'E{r}'].value and ws[f'E{r}'].value > 0: ws[f'E{r}'].font = Font(color=verde, bold=True)
+
             ws.column_dimensions['A'].width = 35
             for c in ['B', 'C', 'D', 'E']: ws.column_dimensions[c].width = 18
 
         st.download_button(
-            label="Baixar Planilha Excel Formatada",
+            label="📥 Baixar Planilha Excel Formatada",
             data=output.getvalue(),
             file_name=f"ROI_Dashboard_{datetime.now().strftime('%d%m%Y')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -151,4 +147,4 @@ if file_meta and file_adx:
     except Exception as e:
         st.error(f"Erro ao processar arquivos: {e}")
 else:
-    st.info("Aguardando upload dos arquivos Meta e AdX para gerar o dashboard.")
+    st.info("Aguardando upload dos arquivos para gerar o dashboard.")

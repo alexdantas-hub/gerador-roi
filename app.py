@@ -4,7 +4,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 
-# 1. CONFIGURAÇÕES E ESTILO VISUAL PREMIUM
 st.set_page_config(page_title="ROI Intelligence System", layout="wide")
 
 def color_negative_red(val):
@@ -19,6 +18,25 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(creds)
 
+def clean_numeric(val):
+    """Converte qualquer valor vindo do Sheets para float de forma segura."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace('R$', '').replace(' ', '').replace('%', '')
+    if not s or s.lower() == 'nan':
+        return 0.0
+    # Formato BR com separador de milhar: 1.234,56
+    if ',' in s and '.' in s:
+        s = s.replace('.', '').replace(',', '.')
+    # Formato BR sem milhar: 1234,56
+    elif ',' in s:
+        s = s.replace(',', '.')
+    # Formato EN (ponto decimal): 1234.56 — mantém como está
+    try:
+        return float(s)
+    except:
+        return 0.0
+
 st.title("📊 ROI Intelligence System")
 
 tab1, tab2 = st.tabs(["🚀 Processamento Diário", "📈 Consulta Histórica"])
@@ -27,7 +45,7 @@ with tab1:
     st.sidebar.header("Configurações")
     data_referencia = st.sidebar.date_input("Data de Referência", datetime.now())
     cambio = st.sidebar.number_input("Cotação do Dólar (R$)", value=5.00, step=0.01)
-    
+
     col_u1, col_u2 = st.columns(2)
     with col_u1: file_meta = st.file_uploader("📁 Meta Ads", type=["csv"])
     with col_u2: file_adx = st.file_uploader("📁 AdX", type=["csv"])
@@ -36,25 +54,29 @@ with tab1:
         try:
             df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8')
             df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8')
-            
-            # Limpeza de nomes
+
             df_m['core'] = df_m['Nome do anúncio'].str.lower().str.strip().str.replace('"', '')
             df_a['core'] = df_a['utm_campaign'].str.lower().str.strip().str.replace('"', '')
-            
-            # Agrupamento
+
             meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
-            df_a['G_USD'] = df_a['Ganhos'].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False).astype(float)
+            df_a['G_USD'] = (df_a['Ganhos'].astype(str)
+                             .str.replace('$', '', regex=False)
+                             .str.replace(',', '', regex=False)
+                             .astype(float))
             adx_g = df_a.groupby('core')['G_USD'].sum().reset_index()
-            
+
             merged = pd.merge(meta_g, adx_g, on='core', how='left').fillna(0)
             merged.columns = ['Campanha', 'Investimento', 'Receita (USD)']
             merged['Receita (BRL)'] = merged['Receita (USD)'] * cambio
             merged['Lucro'] = merged['Receita (BRL)'] - merged['Investimento']
-            merged['ROI'] = merged['Lucro'] / merged['Investimento']
-            
-            # Métricas de topo
-            inv_t, rec_t = merged['Investimento'].sum(), merged['Receita (BRL)'].sum()
-            luc_t, roi_t = rec_t - inv_t, (rec_t - inv_t) / inv_t if inv_t > 0 else 0
+            merged['ROI'] = merged.apply(
+                lambda r: r['Lucro'] / r['Investimento'] if r['Investimento'] > 0 else 0, axis=1
+            )
+
+            inv_t = merged['Investimento'].sum()
+            rec_t = merged['Receita (BRL)'].sum()
+            luc_t = rec_t - inv_t
+            roi_t = luc_t / inv_t if inv_t > 0 else 0
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Investimento Total", f"R$ {inv_t:,.2f}")
@@ -63,72 +85,109 @@ with tab1:
             m4.metric("ROI Geral", f"{roi_t:.2%}")
 
             st.dataframe(merged.style.format({
-                'Investimento': 'R$ {:,.2f}', 'Receita (BRL)': 'R$ {:,.2f}', 'Lucro': 'R$ {:,.2f}', 'ROI': '{:.2%}'
+                'Investimento': 'R$ {:,.2f}',
+                'Receita (USD)': '$ {:,.2f}',
+                'Receita (BRL)': 'R$ {:,.2f}',
+                'Lucro': 'R$ {:,.2f}',
+                'ROI': '{:.2%}'
             }).map(color_negative_red, subset=['Lucro', 'ROI']), use_container_width=True)
 
             if st.button("💾 Salvar no Google Sheets"):
                 client = get_gspread_client()
                 sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
                 data_str = data_referencia.strftime('%Y-%m-%d')
-                new_rows = [[data_str, r['Campanha'].upper(), r['Investimento'], r['Receita (USD)'], 
-                             r['Receita (BRL)'], r['Lucro'], r['ROI']] for _, r in merged.iterrows()]
-                sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
-                st.success("✅ Salvo!")
-        except Exception as e: st.error(f"Erro: {e}")
+                # IMPORTANTE: ROI NÃO é salvo — será sempre recalculado na leitura
+                # Valores salvos como números puros (ponto decimal, sem formatação)
+                new_rows = [
+                    [
+                        data_str,
+                        r['Campanha'].upper(),
+                        round(float(r['Investimento']), 2),
+                        round(float(r['Receita (USD)']), 2),
+                        round(float(r['Receita (BRL)']), 2),
+                        round(float(r['Lucro']), 2)
+                        # ROI omitido intencionalmente
+                    ]
+                    for _, r in merged.iterrows()
+                ]
+                sheet.append_rows(new_rows, value_input_option='RAW')
+                st.success("✅ Salvo com sucesso!")
+        except Exception as e:
+            st.error(f"Erro: {e}")
 
 with tab2:
     st.subheader("🔍 Análise de Desempenho Histórico")
-    
-    # 2. RESTAURAÇÃO DOS SELETORES DE DATA
+
     opcao_data = st.selectbox("Selecione o Período", ["Hoje", "Ontem", "Últimos 7 dias", "Personalizado"])
     hoje = datetime.now().date()
-    if opcao_data == "Hoje": start, end = hoje, hoje
-    elif opcao_data == "Ontem": start = end = hoje - timedelta(days=1)
-    elif opcao_data == "Últimos 7 dias": start, end = hoje - timedelta(days=7), hoje
+    if opcao_data == "Hoje":
+        start, end = hoje, hoje
+    elif opcao_data == "Ontem":
+        start = end = hoje - timedelta(days=1)
+    elif opcao_data == "Últimos 7 dias":
+        start, end = hoje - timedelta(days=7), hoje
     else:
         c1, c2 = st.columns(2)
         start = c1.date_input("Início", hoje - timedelta(days=30))
         end = c2.date_input("Fim", hoje)
 
     if st.button("Consultar Histórico"):
-        client = get_gspread_client()
-        sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
-        df_h = pd.DataFrame(sheet.get_all_records())
-        
-        # 3. TRATAMENTO DE DADOS ULTRA-ROBUSTO (O FIM DA DISCREPÂNCIA)
-        def clean_sheets_value(val):
-            s = str(val).strip()
-            if not s or s == 'nan': return 0.0
-            # Se houver ponto e vírgula (ex: 1.234,56), removemos o ponto de milhar
-            if '.' in s and ',' in s: s = s.replace('.', '')
-            # Troca a vírgula decimal por ponto para o Python entender
-            s = s.replace(',', '.')
-            try: return float(s)
-            except: return 0.0
+        try:
+            client = get_gspread_client()
+            sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
 
-        for col in ['Investimento', 'Receita (BRL)', 'Lucro', 'ROI']:
-            df_h[col] = df_h[col].apply(clean_sheets_value)
-        
-        # Filtro de datas
-        df_h['Data_Ref'] = pd.to_datetime(df_h['Data_Ref']).dt.date
-        df_final = df_h[(df_h['Data_Ref'] >= start) & (df_h['Data_Ref'] <= end)].copy()
+            # Lê como strings brutas para evitar qualquer interpretação automática do gspread
+            raw = sheet.get_all_values()
+            if len(raw) < 2:
+                st.warning("Sem dados na planilha.")
+            else:
+                headers = raw[0]
+                df_h = pd.DataFrame(raw[1:], columns=headers)
 
-        if not df_final.empty:
-            # Recalcula ROI para garantir que o visual bata com os números
-            df_final['ROI'] = df_final.apply(lambda r: r['Lucro']/r['Investimento'] if r['Investimento'] > 0 else 0, axis=1)
-            
-            inv_h, rec_h = df_final['Investimento'].sum(), df_final['Receita (BRL)'].sum()
-            luc_h = rec_h - inv_h
-            roi_h = luc_h / inv_h if inv_h > 0 else 0
-            
-            h1, h2, h3, h4 = st.columns(4)
-            h1.metric("Investimento", f"R$ {inv_h:,.2f}")
-            h2.metric("Receita", f"R$ {rec_h:,.2f}")
-            h3.metric("Lucro", f"R$ {luc_h:,.2f}")
-            h4.metric("ROI Médio", f"{roi_h:.2%}")
-            
-            st.dataframe(df_final.style.format({
-                'Investimento': 'R$ {:,.2f}', 'Receita (BRL)': 'R$ {:,.2f}',
-                'Lucro': 'R$ {:,.2f}', 'ROI': '{:.2%}'
-            }).map(color_negative_red, subset=['Lucro', 'ROI']), use_container_width=True)
-        else: st.warning("Sem dados para este período.")
+                # Converte colunas numéricas com função robusta
+                for col in ['Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro']:
+                    if col in df_h.columns:
+                        df_h[col] = df_h[col].apply(clean_numeric)
+
+                # ROI sempre recalculado — nunca lido da planilha
+                df_h['ROI'] = df_h.apply(
+                    lambda r: r['Lucro'] / r['Investimento'] if r['Investimento'] > 0 else 0, axis=1
+                )
+
+                df_h['Data_Ref'] = pd.to_datetime(df_h['Data_Ref'], errors='coerce').dt.date
+                df_final = df_h[(df_h['Data_Ref'] >= start) & (df_h['Data_Ref'] <= end)].copy()
+
+                if not df_final.empty:
+                    inv_h = df_final['Investimento'].sum()
+                    rec_h = df_final['Receita (BRL)'].sum()
+                    luc_h = rec_h - inv_h
+                    roi_h = luc_h / inv_h if inv_h > 0 else 0
+
+                    h1, h2, h3, h4 = st.columns(4)
+                    h1.metric("Investimento", f"R$ {inv_h:,.2f}")
+                    h2.metric("Receita", f"R$ {rec_h:,.2f}")
+                    h3.metric("Lucro", f"R$ {luc_h:,.2f}")
+                    h4.metric("ROI Médio", f"{roi_h:.2%}")
+
+                    cols_display = ['Data_Ref', 'Campanha', 'Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro', 'ROI']
+                    cols_display = [c for c in cols_display if c in df_final.columns]
+
+                    fmt = {
+                        'Investimento': 'R$ {:,.2f}',
+                        'Receita (USD)': '$ {:,.2f}',
+                        'Receita (BRL)': 'R$ {:,.2f}',
+                        'Lucro': 'R$ {:,.2f}',
+                        'ROI': '{:.2%}'
+                    }
+                    fmt = {k: v for k, v in fmt.items() if k in cols_display}
+
+                    st.dataframe(
+                        df_final[cols_display].style
+                        .format(fmt)
+                        .map(color_negative_red, subset=['Lucro', 'ROI']),
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("Sem dados para este período.")
+        except Exception as e:
+            st.error(f"Erro ao consultar: {e}")

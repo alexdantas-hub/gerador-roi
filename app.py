@@ -74,7 +74,6 @@ with tab1:
             st.markdown("---")
             st.subheader("📋 Detalhamento por Campanha")
             
-            # TABELA PREMIUM (Correção applymap -> map)
             df_styled = merged.style.format({
                 'Investimento': 'R$ {:,.2f}', 'Receita (USD)': '$ {:,.2f}',
                 'Receita (BRL)': 'R$ {:,.2f}', 'Lucro': 'R$ {:,.2f}', 'ROI': '{:.2%}'
@@ -82,23 +81,19 @@ with tab1:
             
             st.dataframe(df_styled, use_container_width=True, height=450)
 
-            # --- SALVAMENTO CORRIGIDO ---
+            # --- SALVAMENTO ---
             if st.button("💾 Salvar no Google Sheets"):
                 client = get_gspread_client()
                 sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
-                
                 coluna_datas = sheet.col_values(1)
                 datas_norm = [pd.to_datetime(d).strftime('%Y-%m-%d') if d != 'Data_Ref' else d for d in coluna_datas]
                 
                 if data_str in datas_norm:
                     st.session_state.confirmar_salvamento = True
                 else:
-                    # Forçamos float puro para evitar erros de interpretação do Sheets
                     new_rows = [[data_str, r['Campanha'].upper(), float(r['Investimento']), 
                                  float(r['Receita (USD)']), float(r['Receita (BRL)']), 
                                  float(r['Lucro']), float(r['ROI'])] for _, r in merged.iterrows()]
-                    
-                    # USER_ENTERED faz o Sheets tratar o ponto como decimal corretamente
                     sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
                     st.success("✅ Dados salvos com sucesso!")
 
@@ -114,7 +109,6 @@ with tab1:
                             if pd.to_datetime(row[0]).strftime('%Y-%m-%d') == data_str:
                                 sheet.delete_rows(len(rows) - idx)
                         except: continue
-                    
                     new_rows = [[data_str, r['Campanha'].upper(), float(r['Investimento']), float(r['Receita (USD)']), 
                                  float(r['Receita (BRL)']), float(r['Lucro']), float(r['ROI'])] for _, r in merged.iterrows()]
                     sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
@@ -127,8 +121,6 @@ with tab1:
 
 with tab2:
     st.subheader("🔍 Análise de Desempenho Histórico")
-    
-    # Filtro de Período
     opcao_data = st.selectbox("Selecione o Período", ["Ontem", "Hoje", "Últimos 7 dias", "Personalizado"])
     hoje = datetime.now().date()
     if opcao_data == "Hoje": start = end = hoje
@@ -143,7 +135,6 @@ with tab2:
         sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
         data = pd.DataFrame(sheet.get_all_records())
         
-        # Limpeza robusta para a consulta
         data['Data_Ref'] = pd.to_datetime(data['Data_Ref'], errors='coerce').dt.date
         df_f = data.dropna(subset=['Data_Ref'])
         df_f = df_f[df_f['Campanha'] != 'TOTAL']
@@ -160,7 +151,8 @@ with tab2:
             h1.metric("Investimento", f"R$ {inv_h:,.2f}")
             h2.metric("Receita", f"R$ {rec_h:,.2f}")
             h3.metric("Lucro", f"R$ {luc_h:,.2f}", delta=f"R$ {luc_h:,.2f}")
-            h4.metric("ROI Médio", f"{roi_h:.2%}", delta=f"{roi_t:.2%}")
+            # CORREÇÃO: Usando roi_h em vez de roi_t no delta
+            h4.metric("ROI Médio", f"{roi_h:.2%}", delta=f"{roi_h:.2%}")
             
             st.dataframe(
                 df_final.style.format({

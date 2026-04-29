@@ -247,7 +247,9 @@ with tab2:
 
                     # ── TABELAS ────────────────────────────────────────────────
                     st.markdown("### 📋 Tabelas")
-                    tb_resumo, tb_detalhado = st.tabs(["Resumo por Campanha", "Detalhado por Dia"])
+                    tb_resumo, tb_detalhado, tb_diario = st.tabs([
+                        "Resumo por Campanha", "Detalhado por Dia", "📅 Consolidado por Dia"
+                    ])
 
                     fmt = {
                         'Investimento': 'R$ {:,.2f}',
@@ -288,6 +290,66 @@ with tab2:
                             det.style.format(fmt)
                             .map(color_negative_red, subset=['Lucro', 'ROI']),
                             use_container_width=True, hide_index=True
+                        )
+
+                    with tb_diario:
+                        # Agrupa tudo por data — uma linha por dia
+                        cons = df_final.groupby('Data_Ref').agg(
+                            Investimento=('Investimento', 'sum'),
+                            Receita_USD=('Receita (USD)', 'sum'),
+                            Receita_BRL=('Receita (BRL)', 'sum'),
+                            Lucro=('Lucro', 'sum')
+                        ).reset_index()
+                        cons['ROI'] = cons.apply(
+                            lambda r: r['Lucro'] / r['Investimento'] if r['Investimento'] > 0 else 0, axis=1
+                        )
+                        cons = cons.rename(columns={
+                            'Receita_USD': 'Receita (USD)',
+                            'Receita_BRL': 'Receita (BRL)'
+                        })
+                        cons = cons.sort_values('Data_Ref')
+
+                        # Linha de totais do período
+                        total_inv  = cons['Investimento'].sum()
+                        total_usd  = cons['Receita (USD)'].sum()
+                        total_brl  = cons['Receita (BRL)'].sum()
+                        total_luc  = cons['Lucro'].sum()
+                        total_roi  = total_luc / total_inv if total_inv > 0 else 0
+
+                        totais = pd.DataFrame([{
+                            'Data_Ref': 'TOTAL',
+                            'Investimento': total_inv,
+                            'Receita (USD)': total_usd,
+                            'Receita (BRL)': total_brl,
+                            'Lucro': total_luc,
+                            'ROI': total_roi
+                        }])
+                        cons_display = pd.concat([cons, totais], ignore_index=True)
+                        cons_display['Data_Ref'] = cons_display['Data_Ref'].astype(str)
+
+                        def highlight_total(row):
+                            if row['Data_Ref'] == 'TOTAL':
+                                return ['font-weight: bold; background-color: #1e1e2e; color: white'] * len(row)
+                            return [''] * len(row)
+
+                        st.dataframe(
+                            cons_display[['Data_Ref', 'Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro', 'ROI']]
+                            .style
+                            .format({**fmt, 'Data_Ref': '{}'})
+                            .map(color_negative_red, subset=['Lucro', 'ROI'])
+                            .apply(highlight_total, axis=1),
+                            use_container_width=True, hide_index=True
+                        )
+
+                        # Botão de download CSV
+                        csv_data = cons[['Data_Ref', 'Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro', 'ROI']].copy()
+                        csv_data['Data_Ref'] = csv_data['Data_Ref'].astype(str)
+                        csv_data['ROI'] = (csv_data['ROI'] * 100).round(2).astype(str) + '%'
+                        st.download_button(
+                            label="⬇️ Baixar CSV",
+                            data=csv_data.to_csv(index=False, sep=';', decimal=',').encode('utf-8'),
+                            file_name=f"consolidado_{start}_{end}.csv",
+                            mime='text/csv'
                         )
 
                     st.divider()

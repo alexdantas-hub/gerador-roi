@@ -55,8 +55,11 @@ with tab1:
             df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8')
             df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8')
 
-            df_m['core'] = df_m['Nome do anúncio'].str.lower().str.strip().str.replace('"', '')
-            df_a['core'] = df_a['utm_campaign'].str.lower().str.strip().str.replace('"', '')
+            # Remove prefixo de 2 letras (ex: "AD" no Meta, "CA" no AdX) antes de fazer o merge
+            df_m['core'] = (df_m['Nome do anúncio'].str.lower().str.strip()
+                            .str.replace('"', '').str.replace(r'^[a-z]{2}', '', regex=True))
+            df_a['core'] = (df_a['utm_campaign'].str.lower().str.strip()
+                            .str.replace('"', '').str.replace(r'^[a-z]{2}', '', regex=True))
 
             meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
             df_a['G_USD'] = (df_a['Ganhos'].astype(str)

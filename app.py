@@ -1,4 +1,6 @@
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -111,8 +113,6 @@ with tab1:
             st.error(f"Erro: {e}")
 
 with tab2:
-    import plotly.express as px
-    import plotly.graph_objects as go
 
     st.subheader("🔍 Análise de Desempenho Histórico")
 

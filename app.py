@@ -4,17 +4,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 from io import BytesIO
 from datetime import datetime, timedelta
-import altair as alt # Biblioteca para gráficos mais bonitos
+import altair as alt
 
-# 1. CONFIGURAÇÃO E ESTILO PREMIUM
+# 1. CONFIGURAÇÃO E ESTILO
 st.set_page_config(page_title="ROI Analyzer Premium", layout="wide")
-
-st.markdown("""
-    <style>
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .stButton>button { background-color: #2c3e50; color: white; border-radius: 8px; width: 100%; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
 
 def get_gspread_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -22,111 +15,135 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(creds)
 
-# --- INÍCIO DO APP ---
 st.title("📊 ROI Intelligence System")
+
+# Inicializar estados de confirmação
+if 'confirmar_salvamento' not in st.session_state:
+    st.session_state.confirmar_salvamento = False
 
 # Criando as Abas
 tab1, tab2 = st.tabs(["🚀 Processamento Diário", "📈 Consulta Histórica"])
 
 with tab1:
-    # --- TODO O CÓDIGO QUE JÁ TEMOS VAI AQUI (Simplificado para brevidade) ---
-    st.subheader("Subir novos dados")
-    # (Mantenha aqui a sua lógica de upload e o botão de salvar que já funciona)
-    st.info("Utilize esta aba para processar os arquivos CSV do Meta e AdX e salvar no Google Sheets.")
+    st.sidebar.header("Configurações")
+    data_referencia = st.sidebar.date_input("Data de Referência", datetime.now())
+    cambio = st.sidebar.number_input("Cotação do Dólar (R$)", value=5.00, step=0.01)
+    data_str = data_referencia.strftime('%Y-%m-%d')
+
+    col_u1, col_u2 = st.columns(2)
+    with col_u1: file_meta = st.file_uploader("📁 Meta Ads", type=["csv"])
+    with col_u2: file_adx = st.file_uploader("📁 AdX", type=["csv"])
+
+    if file_meta and file_adx:
+        try:
+            # ... (Lógica de processamento igual à anterior) ...
+            df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8')
+            df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8')
+            
+            def clean_name(n):
+                n = str(n).lower().strip().replace('"', '')
+                return n[2:] if n.startswith(('ad', 'ca')) else n
+
+            df_m['core'] = df_m['Nome do anúncio'].apply(clean_name)
+            df_a['core'] = df_a['utm_campaign'].apply(clean_name)
+            
+            meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
+            df_a['G_USD'] = df_a['Ganhos'].str.replace('$', '', regex=False).str.replace(',', '', regex=False).astype(float)
+            adx_g = df_a.groupby('core')['G_USD'].sum().reset_index()
+            
+            merged = pd.merge(meta_g, adx_g, on='core', how='left').fillna(0)
+            merged.columns = ['Campanha', 'Investimento', 'Receita (USD)']
+            merged['Receita (BRL)'] = merged['Receita (USD)'] * cambio
+            merged['Lucro'] = merged['Receita (BRL)'] - merged['Investimento']
+            merged['ROI'] = merged['Lucro'] / merged['Investimento']
+            
+            st.dataframe(merged.style.format({'ROI': '{:.2%}'}), use_container_width=True)
+
+            # LÓGICA DE SALVAMENTO CORRIGIDA (SEM BOTÕES ANINHADOS)
+            if st.button("💾 Salvar no Google Sheets"):
+                client = get_gspread_client()
+                sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
+                
+                # Normalizar datas para comparação (evita erro de formato BR vs ISO)
+                coluna_datas = sheet.col_values(1)
+                datas_normalizadas = [pd.to_datetime(d).strftime('%Y-%m-%d') if d != 'Data_Ref' else d for d in coluna_datas]
+                
+                if data_str in datas_normalizadas:
+                    st.session_state.confirmar_salvamento = True
+                else:
+                    new_rows = [[data_str, r['Campanha'].upper(), r['Investimento'], r['Receita (USD)'], 
+                                 r['Receita (BRL)'], r['Lucro'], r['ROI']] for _, r in merged.iterrows()]
+                    sheet.append_rows(new_rows)
+                    st.success("✅ Dados salvos com sucesso!")
+
+            if st.session_state.confirmar_salvamento:
+                st.warning(f"⚠️ Já existem dados para {data_str}. Deseja sobrescrever?")
+                col_c1, col_c2 = st.columns(2)
+                if col_c1.button("Sim, Substituir"):
+                    client = get_gspread_client()
+                    sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
+                    records = sheet.get_all_values()
+                    # Deletar linhas antigas de trás para frente
+                    for i, row in enumerate(reversed(records)):
+                        idx = len(records) - i
+                        try:
+                            if pd.to_datetime(row[0]).strftime('%Y-%m-%d') == data_str:
+                                sheet.delete_rows(idx)
+                        except: continue
+                    
+                    new_rows = [[data_str, r['Campanha'].upper(), r['Investimento'], r['Receita (USD)'], 
+                                 r['Receita (BRL)'], r['Lucro'], r['ROI']] for _, r in merged.iterrows()]
+                    sheet.append_rows(new_rows)
+                    st.session_state.confirmar_salvamento = False
+                    st.success("🔄 Dados atualizados!")
+                    st.rerun()
+                
+                if col_c2.button("Cancelar"):
+                    st.session_state.confirmar_salvamento = False
+                    st.rerun()
+
+        except Exception as e:
+            st.error(f"Erro: {e}")
 
 with tab2:
     st.subheader("🔍 Análise de Desempenho por Período")
     
-    # Filtros de Data
-    col_f1, col_f2 = st.columns([1, 2])
-    with col_f1:
-        opcao_data = st.selectbox("Selecione o Período", [
-            "Hoje", "Ontem", "Últimos 7 dias", "Últimos 15 dias", 
-            "Mês Atual", "Mês Passado", "Personalizado"
-        ])
-        
-        hoje = datetime.now().date()
-        if opcao_data == "Hoje": start, end = hoje, hoje
-        elif opcao_data == "Ontem": start = end = hoje - timedelta(days=1)
-        elif opcao_data == "Últimos 7 dias": start, end = hoje - timedelta(days=7), hoje
-        elif opcao_data == "Últimos 15 dias": start, end = hoje - timedelta(days=15), hoje
-        elif opcao_data == "Mês Atual": start, end = hoje.replace(day=1), hoje
-        elif opcao_data == "Mês Passado":
-            last_month = hoje.replace(day=1) - timedelta(days=1)
-            start, end = last_month.replace(day=1), last_month
-        else:
-            start = st.date_input("Início", hoje - timedelta(days=30))
-            end = st.date_input("Fim", hoje)
+    opcao_data = st.selectbox("Selecione o Período", ["Hoje", "Ontem", "Últimos 7 dias", "Mês Atual", "Personalizado"])
+    hoje = datetime.now().date()
+    
+    if opcao_data == "Hoje": start, end = hoje, hoje
+    elif opcao_data == "Ontem": start = end = hoje - timedelta(days=1)
+    elif opcao_data == "Últimos 7 dias": start, end = hoje - timedelta(days=7), hoje
+    elif opcao_data == "Mês Atual": start, end = hoje.replace(day=1), hoje
+    else:
+        start = st.date_input("Início", hoje - timedelta(days=30))
+        end = st.date_input("Fim", hoje)
 
-    # Botão para Carregar Dados
     if st.button("Consultar Histórico"):
-        with st.spinner("Buscando dados no Google Sheets..."):
-            client = get_gspread_client()
-            sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
-            data = pd.DataFrame(sheet.get_all_records())
+        client = get_gspread_client()
+        sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
+        data = pd.DataFrame(sheet.get_all_records())
+        
+        # Filtro Robusto: Converte datas e remove linhas "TOTAL"
+        data['Data_Ref'] = pd.to_datetime(data['Data_Ref'], errors='coerce').dt.date
+        df_filtered = data.dropna(subset=['Data_Ref'])
+        
+        # REMOVE LINHAS QUE POSSAM SER TOTAIS (Para não dobrar o valor)
+        df_filtered = df_filtered[df_filtered['Campanha'] != 'TOTAL']
+        
+        mask = (df_filtered['Data_Ref'] >= start) & (df_filtered['Data_Ref'] <= end)
+        df_final = df_filtered.loc[mask]
+
+        if df_final.empty:
+            st.warning("Sem dados para este período.")
+        else:
+            # Métricas
+            inv = df_final['Investimento'].sum()
+            rec = df_final['Receita (BRL)'].sum()
+            st.columns(3)[0].metric("Investimento Total", f"R$ {inv:,.2f}")
+            st.columns(3)[1].metric("Receita Total", f"R$ {rec:,.2f}")
+            st.columns(3)[2].metric("ROI", f"{(rec-inv)/inv:.2%}")
             
-            # Converter coluna de data para o formato datetime do Pandas
-            data['Data_Ref'] = pd.to_datetime(data['Data_Ref']).dt.date
-            
-            # Filtrar pelo período selecionado
-            mask = (data['Data_Ref'] >= start) & (data['Data_Ref'] <= end)
-            df_filtered = data.loc[mask]
-
-            if df_filtered.empty:
-                st.warning("Nenhum dado encontrado para este período.")
-            else:
-                # Métricas Agregadas
-                t_inv = df_filtered['Investimento'].sum()
-                t_rec = df_filtered['Receita (BRL)'].sum()
-                t_luc = t_rec - t_inv
-                t_roi = t_luc / t_inv if t_inv > 0 else 0
-
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Investimento no Período", f"R$ {t_inv:,.2f}")
-                m2.metric("Receita no Período", f"R$ {t_rec:,.2f}")
-                m3.metric("Lucro no Período", f"R$ {t_luc:,.2f}")
-                m4.metric("ROI Médio", f"{t_roi:.2%}")
-
-                # --- GRÁFICOS ---
-                st.markdown("### 📊 Visualização de Dados")
-                g1, g2 = st.columns(2)
-                
-                with g1:
-                    st.write("**Evolução da Receita vs Investimento**")
-                    evolucao = df_filtered.groupby('Data_Ref').agg({'Investimento': 'sum', 'Receita (BRL)': 'sum'}).reset_index()
-                    st.line_chart(evolucao.set_index('Data_Ref'))
-
-                with g2:
-                    st.write("**ROI por Campanha (Média do Período)**")
-                    # Agrupar por campanha para ver quem performou melhor no total
-                    per_camp = df_filtered.groupby('Campanha').agg({
-                        'Investimento': 'sum', 
-                        'Receita (BRL)': 'sum',
-                        'Lucro': 'sum'
-                    }).reset_index()
-                    per_camp['ROI'] = per_camp['Lucro'] / per_camp['Investimento']
-                    
-                    # Gráfico de Barras com Altair para cores condicionais
-                    chart = alt.Chart(per_camp).mark_bar().encode(
-                        x='Campanha:N',
-                        y='ROI:Q',
-                        color=alt.condition(
-                            alt.datum.ROI > 0,
-                            alt.value('#27ae60'), # Verde
-                            alt.value('#c0392b')  # Vermelho
-                        )
-                    ).properties(height=300)
-                    st.altair_chart(chart, use_container_width=True)
-
-                # --- TABELA DETALHADA ---
-                st.markdown("### 📋 Resumo Consolidado do Período")
-                per_camp_display = per_camp.sort_values('ROI', ascending=False)
-                st.dataframe(
-                    per_camp_display.style.format({
-                        'Investimento': 'R$ {:,.2f}',
-                        'Receita (BRL)': 'R$ {:,.2f}',
-                        'Lucro': 'R$ {:,.2f}',
-                        'ROI': '{:.2%}'
-                    }),
-                    use_container_width=True, hide_index=True
-                )
+            # Gráfico de Evolução (Linhas)
+            evol = df_final.groupby('Data_Ref').agg({'Investimento':'sum', 'Receita (BRL)':'sum'}).reset_index()
+            st.line_chart(evol.set_index('Data_Ref'))

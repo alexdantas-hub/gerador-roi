@@ -19,19 +19,15 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 def clean_numeric(val):
-    """Converte qualquer valor vindo do Sheets para float de forma segura."""
     if isinstance(val, (int, float)):
         return float(val)
     s = str(val).strip().replace('R$', '').replace(' ', '').replace('%', '')
     if not s or s.lower() == 'nan':
         return 0.0
-    # Formato BR com separador de milhar: 1.234,56
     if ',' in s and '.' in s:
         s = s.replace('.', '').replace(',', '.')
-    # Formato BR sem milhar: 1234,56
     elif ',' in s:
         s = s.replace(',', '.')
-    # Formato EN (ponto decimal): 1234.56 — mantém como está
     try:
         return float(s)
     except:
@@ -52,10 +48,9 @@ with tab1:
 
     if file_meta and file_adx:
         try:
-            df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8')
-            df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8')
+            df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8-sig')
+            df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8-sig')
 
-            # Remove prefixo de 2 letras (ex: "AD" no Meta, "CA" no AdX) antes de fazer o merge
             df_m['core'] = (df_m['Nome do anúncio'].str.lower().str.strip()
                             .str.replace('"', '').str.replace(r'^[a-z]{2}', '', regex=True))
             df_a['core'] = (df_a['utm_campaign'].str.lower().str.strip()
@@ -99,8 +94,6 @@ with tab1:
                 client = get_gspread_client()
                 sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
                 data_str = data_referencia.strftime('%Y-%m-%d')
-                # IMPORTANTE: ROI NÃO é salvo — será sempre recalculado na leitura
-                # Valores salvos como números puros (ponto decimal, sem formatação)
                 new_rows = [
                     [
                         data_str,
@@ -109,7 +102,6 @@ with tab1:
                         round(float(r['Receita (USD)']), 2),
                         round(float(r['Receita (BRL)']), 2),
                         round(float(r['Lucro']), 2)
-                        # ROI omitido intencionalmente
                     ]
                     for _, r in merged.iterrows()
                 ]
@@ -119,16 +111,33 @@ with tab1:
             st.error(f"Erro: {e}")
 
 with tab2:
+    import plotly.express as px
+    import plotly.graph_objects as go
+
     st.subheader("🔍 Análise de Desempenho Histórico")
 
-    opcao_data = st.selectbox("Selecione o Período", ["Hoje", "Ontem", "Últimos 7 dias", "Personalizado"])
     hoje = datetime.now().date()
+    primeiro_dia_mes = hoje.replace(day=1)
+    ultimo_mes_fim = primeiro_dia_mes - timedelta(days=1)
+    ultimo_mes_inicio = ultimo_mes_fim.replace(day=1)
+
+    opcao_data = st.selectbox("Selecione o Período", [
+        "Hoje", "Ontem", "Últimos 7 dias", "Últimos 15 dias",
+        "Mês Atual", "Mês Passado", "Personalizado"
+    ])
+
     if opcao_data == "Hoje":
         start, end = hoje, hoje
     elif opcao_data == "Ontem":
         start = end = hoje - timedelta(days=1)
     elif opcao_data == "Últimos 7 dias":
-        start, end = hoje - timedelta(days=7), hoje
+        start, end = hoje - timedelta(days=6), hoje
+    elif opcao_data == "Últimos 15 dias":
+        start, end = hoje - timedelta(days=14), hoje
+    elif opcao_data == "Mês Atual":
+        start, end = primeiro_dia_mes, hoje
+    elif opcao_data == "Mês Passado":
+        start, end = ultimo_mes_inicio, ultimo_mes_fim
     else:
         c1, c2 = st.columns(2)
         start = c1.date_input("Início", hoje - timedelta(days=30))
@@ -139,7 +148,6 @@ with tab2:
             client = get_gspread_client()
             sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
 
-            # Lê como strings brutas para evitar qualquer interpretação automática do gspread
             raw = sheet.get_all_values()
             if len(raw) < 2:
                 st.warning("Sem dados na planilha.")
@@ -147,33 +155,36 @@ with tab2:
                 headers = raw[0]
                 df_h = pd.DataFrame(raw[1:], columns=headers)
 
-                # Converte colunas numéricas com função robusta
                 for col in ['Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro']:
                     if col in df_h.columns:
                         df_h[col] = df_h[col].apply(clean_numeric)
 
-                # ROI sempre recalculado — nunca lido da planilha
                 df_h['ROI'] = df_h.apply(
                     lambda r: r['Lucro'] / r['Investimento'] if r['Investimento'] > 0 else 0, axis=1
                 )
-
                 df_h['Data_Ref'] = pd.to_datetime(df_h['Data_Ref'], errors='coerce').dt.date
                 df_final = df_h[(df_h['Data_Ref'] >= start) & (df_h['Data_Ref'] <= end)].copy()
 
-                if not df_final.empty:
+                if df_final.empty:
+                    st.warning("Sem dados para este período.")
+                else:
+                    # ── CARDS ──────────────────────────────────────────────────
                     inv_h = df_final['Investimento'].sum()
                     rec_h = df_final['Receita (BRL)'].sum()
                     luc_h = rec_h - inv_h
                     roi_h = luc_h / inv_h if inv_h > 0 else 0
 
                     h1, h2, h3, h4 = st.columns(4)
-                    h1.metric("Investimento", f"R$ {inv_h:,.2f}")
-                    h2.metric("Receita", f"R$ {rec_h:,.2f}")
-                    h3.metric("Lucro", f"R$ {luc_h:,.2f}")
-                    h4.metric("ROI Médio", f"{roi_h:.2%}")
+                    h1.metric("💰 Investimento", f"R$ {inv_h:,.2f}")
+                    h2.metric("📥 Receita", f"R$ {rec_h:,.2f}")
+                    h3.metric("💵 Lucro", f"R$ {luc_h:,.2f}")
+                    h4.metric("📊 ROI Médio", f"{roi_h:.2%}")
 
-                    cols_display = ['Data_Ref', 'Campanha', 'Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro', 'ROI']
-                    cols_display = [c for c in cols_display if c in df_final.columns]
+                    st.divider()
+
+                    # ── TABELAS ────────────────────────────────────────────────
+                    st.markdown("### 📋 Tabelas")
+                    tb_resumo, tb_detalhado = st.tabs(["Resumo por Campanha", "Detalhado por Dia"])
 
                     fmt = {
                         'Investimento': 'R$ {:,.2f}',
@@ -182,15 +193,138 @@ with tab2:
                         'Lucro': 'R$ {:,.2f}',
                         'ROI': '{:.2%}'
                     }
-                    fmt = {k: v for k, v in fmt.items() if k in cols_display}
 
-                    st.dataframe(
-                        df_final[cols_display].style
-                        .format(fmt)
-                        .map(color_negative_red, subset=['Lucro', 'ROI']),
-                        use_container_width=True
+                    with tb_resumo:
+                        resumo = df_final.groupby('Campanha').agg(
+                            Investimento=('Investimento', 'sum'),
+                            Receita_USD=('Receita (USD)', 'sum'),
+                            Receita_BRL=('Receita (BRL)', 'sum'),
+                            Lucro=('Lucro', 'sum'),
+                            Dias=('Data_Ref', 'nunique')
+                        ).reset_index()
+                        resumo['ROI'] = resumo.apply(
+                            lambda r: r['Lucro'] / r['Investimento'] if r['Investimento'] > 0 else 0, axis=1
+                        )
+                        resumo = resumo.rename(columns={
+                            'Receita_USD': 'Receita (USD)',
+                            'Receita_BRL': 'Receita (BRL)'
+                        })
+                        resumo = resumo.sort_values('ROI', ascending=False)
+
+                        st.dataframe(
+                            resumo[['Campanha', 'Dias', 'Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro', 'ROI']]
+                            .style.format({**fmt, 'Dias': '{:.0f}'})
+                            .map(color_negative_red, subset=['Lucro', 'ROI']),
+                            use_container_width=True, hide_index=True
+                        )
+
+                    with tb_detalhado:
+                        det = df_final[['Data_Ref', 'Campanha', 'Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro', 'ROI']].copy()
+                        det = det.sort_values(['Data_Ref', 'Campanha'])
+                        st.dataframe(
+                            det.style.format(fmt)
+                            .map(color_negative_red, subset=['Lucro', 'ROI']),
+                            use_container_width=True, hide_index=True
+                        )
+
+                    st.divider()
+
+                    # ── GRÁFICOS ───────────────────────────────────────────────
+                    st.markdown("### 📈 Gráficos")
+
+                    # 1. Evolução diária — ROI e Lucro
+                    st.markdown("#### Evolução Diária — ROI e Lucro")
+                    diario = df_final.groupby('Data_Ref').agg(
+                        Investimento=('Investimento', 'sum'),
+                        Receita_BRL=('Receita (BRL)', 'sum'),
+                        Lucro=('Lucro', 'sum')
+                    ).reset_index()
+                    diario['ROI (%)'] = diario.apply(
+                        lambda r: (r['Lucro'] / r['Investimento'] * 100) if r['Investimento'] > 0 else 0, axis=1
                     )
-                else:
-                    st.warning("Sem dados para este período.")
+                    diario['Data_Ref'] = diario['Data_Ref'].astype(str)
+
+                    fig1 = go.Figure()
+                    fig1.add_trace(go.Bar(
+                        x=diario['Data_Ref'], y=diario['Lucro'],
+                        name='Lucro (R$)',
+                        marker_color=['#2ecc71' if v >= 0 else '#e74c3c' for v in diario['Lucro']],
+                        yaxis='y1'
+                    ))
+                    fig1.add_trace(go.Scatter(
+                        x=diario['Data_Ref'], y=diario['ROI (%)'],
+                        name='ROI (%)', mode='lines+markers',
+                        line=dict(color='#3498db', width=2),
+                        marker=dict(size=7), yaxis='y2'
+                    ))
+                    fig1.update_layout(
+                        yaxis=dict(title='Lucro (R$)', side='left'),
+                        yaxis2=dict(title='ROI (%)', side='right', overlaying='y', ticksuffix='%'),
+                        legend=dict(orientation='h', y=1.1),
+                        hovermode='x unified', height=380
+                    )
+                    st.plotly_chart(fig1, use_container_width=True)
+
+                    # 2. Investimento vs Receita por dia
+                    st.markdown("#### Investimento vs Receita por Dia")
+                    fig2 = go.Figure()
+                    fig2.add_trace(go.Bar(
+                        x=diario['Data_Ref'], y=diario['Investimento'],
+                        name='Investimento', marker_color='#e67e22'
+                    ))
+                    fig2.add_trace(go.Bar(
+                        x=diario['Data_Ref'], y=diario['Receita_BRL'],
+                        name='Receita (BRL)', marker_color='#2ecc71'
+                    ))
+                    fig2.update_layout(
+                        barmode='group', yaxis_title='R$',
+                        legend=dict(orientation='h', y=1.1),
+                        hovermode='x unified', height=350
+                    )
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                    # 3. Ranking de campanhas por ROI
+                    st.markdown("#### Ranking de Campanhas por ROI no Período")
+                    ranking = resumo.sort_values('ROI')
+                    ranking = ranking.copy()
+                    ranking['ROI (%)'] = ranking['ROI'] * 100
+                    ranking['cor'] = ranking['ROI (%)'].apply(lambda v: '#2ecc71' if v >= 0 else '#e74c3c')
+
+                    fig3 = go.Figure(go.Bar(
+                        x=ranking['ROI (%)'],
+                        y=ranking['Campanha'],
+                        orientation='h',
+                        marker_color=ranking['cor'].tolist(),
+                        text=ranking['ROI (%)'].apply(lambda v: f'{v:.1f}%'),
+                        textposition='outside'
+                    ))
+                    fig3.update_layout(
+                        xaxis=dict(title='ROI (%)', ticksuffix='%'),
+                        height=max(350, len(ranking) * 38),
+                        margin=dict(l=20, r=80)
+                    )
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                    # 4. ROI por campanha ao longo do tempo
+                    st.markdown("#### ROI por Campanha ao Longo do Tempo")
+                    camp_diario = df_final.copy()
+                    camp_diario['Data_Ref'] = camp_diario['Data_Ref'].astype(str)
+                    camp_diario['ROI (%)'] = camp_diario['ROI'] * 100
+
+                    fig4 = px.line(
+                        camp_diario.sort_values('Data_Ref'),
+                        x='Data_Ref', y='ROI (%)',
+                        color='Campanha', markers=True,
+                        labels={'Data_Ref': 'Data', 'ROI (%)': 'ROI (%)'}
+                    )
+                    fig4.add_hline(y=0, line_dash='dash', line_color='gray', opacity=0.5)
+                    fig4.update_layout(
+                        yaxis_ticksuffix='%',
+                        hovermode='x unified',
+                        legend=dict(orientation='h', y=-0.3),
+                        height=450
+                    )
+                    st.plotly_chart(fig4, use_container_width=True)
+
         except Exception as e:
             st.error(f"Erro ao consultar: {e}")

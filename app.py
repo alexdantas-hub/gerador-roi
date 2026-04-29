@@ -63,6 +63,9 @@ if file_meta and file_adx:
         merged['ROI'] = merged['Lucro'] / merged['Investimento']
         merged = merged.sort_values('ROI', ascending=False)
 
+        # DEFINIÇÃO GLOBAL DA DATA (Correção do erro)
+        data_str = data_referencia.strftime('%Y-%m-%d')
+
         # 4. DASHBOARD VISUAL (MÉTRICAS)
         t_inv, t_rec_brl = merged['Investimento'].sum(), merged['Receita (BRL)'].sum()
         t_luc = t_rec_brl - t_inv
@@ -110,7 +113,6 @@ if file_meta and file_adx:
                 client = get_gspread_client()
                 sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
                 
-                data_str = str(data_referencia)
                 coluna_datas = sheet.col_values(1)
                 
                 if data_str in coluna_datas:
@@ -137,13 +139,12 @@ if file_meta and file_adx:
                         st.success(f"✅ Dados de {data_str} salvos!")
 
         with col_btn2:
-            # Exportação Excel Formatada (Recuperada)
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_ex = df_display.copy()
                 df_ex.to_excel(writer, index=False, sheet_name='ROI', startrow=4)
                 ws = writer.sheets['ROI']
-                azul, cinza = "2C3E50", "7F8C8D"
+                azul = "2C3E50"
                 ws.merge_cells('A1:F1')
                 ws['A1'] = "Relatório de Performance ROI"
                 ws['A1'].font = Font(bold=True, size=16, color=azul)

@@ -4,7 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 
-# 1. ESTILO VISUAL PREMIUM MANTIDO
+# 1. CONFIGURAÇÕES E ESTILO VISUAL PREMIUM
 st.set_page_config(page_title="ROI Intelligence System", layout="wide")
 
 def color_negative_red(val):
@@ -37,9 +37,11 @@ with tab1:
             df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8')
             df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8')
             
-            df_m['core'] = df_m['Nome do anúncio'].str.lower().str.strip().replace('"', '')
-            df_a['core'] = df_a['utm_campaign'].str.lower().str.strip().replace('"', '')
+            # Limpeza de nomes
+            df_m['core'] = df_m['Nome do anúncio'].str.lower().str.strip().str.replace('"', '')
+            df_a['core'] = df_a['utm_campaign'].str.lower().str.strip().str.replace('"', '')
             
+            # Agrupamento
             meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
             df_a['G_USD'] = df_a['Ganhos'].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False).astype(float)
             adx_g = df_a.groupby('core')['G_USD'].sum().reset_index()
@@ -50,7 +52,7 @@ with tab1:
             merged['Lucro'] = merged['Receita (BRL)'] - merged['Investimento']
             merged['ROI'] = merged['Lucro'] / merged['Investimento']
             
-            # DASHBOARD DIÁRIO
+            # Métricas de topo
             inv_t, rec_t = merged['Investimento'].sum(), merged['Receita (BRL)'].sum()
             luc_t, roi_t = rec_t - inv_t, (rec_t - inv_t) / inv_t if inv_t > 0 else 0
 
@@ -71,16 +73,16 @@ with tab1:
                 new_rows = [[data_str, r['Campanha'].upper(), r['Investimento'], r['Receita (USD)'], 
                              r['Receita (BRL)'], r['Lucro'], r['ROI']] for _, r in merged.iterrows()]
                 sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
-                st.success("✅ Dados persistidos!")
+                st.success("✅ Salvo!")
         except Exception as e: st.error(f"Erro: {e}")
 
 with tab2:
     st.subheader("🔍 Análise de Desempenho Histórico")
     
-    # RESTAURANDO O SELETOR DE PERÍODO
+    # 2. RESTAURAÇÃO DOS SELETORES DE DATA
     opcao_data = st.selectbox("Selecione o Período", ["Hoje", "Ontem", "Últimos 7 dias", "Personalizado"])
     hoje = datetime.now().date()
-    if opcao_data == "Hoje": start = end = hoje
+    if opcao_data == "Hoje": start, end = hoje, hoje
     elif opcao_data == "Ontem": start = end = hoje - timedelta(days=1)
     elif opcao_data == "Últimos 7 dias": start, end = hoje - timedelta(days=7), hoje
     else:
@@ -93,17 +95,28 @@ with tab2:
         sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
         df_h = pd.DataFrame(sheet.get_all_records())
         
-        # --- CORREÇÃO DEFINITIVA DA VÍRGULA/PONTO ---
+        # 3. TRATAMENTO DE DADOS ULTRA-ROBUSTO (O FIM DA DISCREPÂNCIA)
+        def clean_sheets_value(val):
+            s = str(val).strip()
+            if not s or s == 'nan': return 0.0
+            # Se houver ponto e vírgula (ex: 1.234,56), removemos o ponto de milhar
+            if '.' in s and ',' in s: s = s.replace('.', '')
+            # Troca a vírgula decimal por ponto para o Python entender
+            s = s.replace(',', '.')
+            try: return float(s)
+            except: return 0.0
+
         for col in ['Investimento', 'Receita (BRL)', 'Lucro', 'ROI']:
-            # Força conversão tratando a vírgula brasileira da planilha
-            df_h[col] = df_h[col].astype(str).str.replace(',', '.', regex=False).str.replace('R$', '', regex=False).str.strip()
-            df_h[col] = pd.to_numeric(df_h[col], errors='coerce').fillna(0)
+            df_h[col] = df_h[col].apply(clean_sheets_value)
         
+        # Filtro de datas
         df_h['Data_Ref'] = pd.to_datetime(df_h['Data_Ref']).dt.date
-        df_final = df_h[(df_h['Data_Ref'] >= start) & (df_h['Data_Ref'] <= end)]
+        df_final = df_h[(df_h['Data_Ref'] >= start) & (df_h['Data_Ref'] <= end)].copy()
 
         if not df_final.empty:
-            # Recalcula Lucro e ROI para garantir precisão no dashboard
+            # Recalcula ROI para garantir que o visual bata com os números
+            df_final['ROI'] = df_final.apply(lambda r: r['Lucro']/r['Investimento'] if r['Investimento'] > 0 else 0, axis=1)
+            
             inv_h, rec_h = df_final['Investimento'].sum(), df_final['Receita (BRL)'].sum()
             luc_h = rec_h - inv_h
             roi_h = luc_h / inv_h if inv_h > 0 else 0
@@ -111,11 +124,11 @@ with tab2:
             h1, h2, h3, h4 = st.columns(4)
             h1.metric("Investimento", f"R$ {inv_h:,.2f}")
             h2.metric("Receita", f"R$ {rec_h:,.2f}")
-            h3.metric("Lucro", f"R$ {luc_h:,.2f}", delta=f"R$ {luc_h:,.2f}")
-            h4.metric("ROI Médio", f"{roi_h:.2%}", delta=f"{roi_h:.2%}")
+            h3.metric("Lucro", f"R$ {luc_h:,.2f}")
+            h4.metric("ROI Médio", f"{roi_h:.2%}")
             
             st.dataframe(df_final.style.format({
                 'Investimento': 'R$ {:,.2f}', 'Receita (BRL)': 'R$ {:,.2f}',
                 'Lucro': 'R$ {:,.2f}', 'ROI': '{:.2%}'
             }).map(color_negative_red, subset=['Lucro', 'ROI']), use_container_width=True)
-        else: st.warning("Nenhum dado encontrado para este período.")
+        else: st.warning("Sem dados para este período.")

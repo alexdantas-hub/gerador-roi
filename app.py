@@ -44,9 +44,22 @@ with tab1:
     data_referencia = st.sidebar.date_input("Data de Referência", datetime.now())
     cambio = st.sidebar.number_input("Cotação do Dólar (R$)", value=5.00, step=0.01)
 
-    col_u1, col_u2 = st.columns(2)
-    with col_u1: file_meta = st.file_uploader("📁 Meta Ads", type=["csv"])
-    with col_u2: file_adx = st.file_uploader("📁 AdX", type=["csv"])
+    # Inicializa chaves dos uploaders no session_state
+    if 'uploader_key' not in st.session_state:
+        st.session_state['uploader_key'] = 0
+
+    col_u1, col_u2, col_u3 = st.columns([4, 4, 1])
+    with col_u1:
+        file_meta = st.file_uploader("📁 Meta Ads", type=["csv"],
+                                     key=f"meta_{st.session_state['uploader_key']}")
+    with col_u2:
+        file_adx = st.file_uploader("📁 AdX", type=["csv"],
+                                    key=f"adx_{st.session_state['uploader_key']}")
+    with col_u3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🗑️ Limpar", help="Remove os arquivos carregados"):
+            st.session_state['uploader_key'] += 1
+            st.rerun()
 
     if file_meta and file_adx:
         try:

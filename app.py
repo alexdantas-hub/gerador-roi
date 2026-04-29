@@ -92,11 +92,9 @@ with tab1:
                 'ROI': '{:.2%}'
             }).map(color_negative_red, subset=['Lucro', 'ROI']), use_container_width=True)
 
-            if st.button("💾 Salvar no Google Sheets"):
-                client = get_gspread_client()
-                sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
-                data_str = data_referencia.strftime('%Y-%m-%d')
-                new_rows = [
+            # Prepara as novas linhas para salvar (usadas tanto no save normal quanto na atualização)
+            def build_new_rows(df, data_str):
+                return [
                     [
                         data_str,
                         r['Campanha'].upper(),
@@ -105,10 +103,75 @@ with tab1:
                         round(float(r['Receita (BRL)']), 2),
                         round(float(r['Lucro']), 2)
                     ]
-                    for _, r in merged.iterrows()
+                    for _, r in df.iterrows()
                 ]
-                sheet.append_rows(new_rows, value_input_option='RAW')
-                st.success("✅ Salvo com sucesso!")
+
+            if st.button("💾 Salvar no Google Sheets"):
+                data_str = data_referencia.strftime('%Y-%m-%d')
+                client = get_gspread_client()
+                sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
+                raw_existing = sheet.get_all_values()
+
+                datas_existentes = set()
+                if len(raw_existing) > 1:
+                    for row in raw_existing[1:]:
+                        if row:
+                            datas_existentes.add(str(row[0]).strip()[:10])
+
+                if data_str in datas_existentes:
+                    # Armazena contexto para o diálogo de confirmação
+                    st.session_state['aguardando_confirmacao'] = True
+                    st.session_state['data_str_pendente'] = data_str
+                    st.session_state['merged_pendente'] = merged.copy()
+                else:
+                    # Não há duplicata: salva diretamente
+                    new_rows = build_new_rows(merged, data_str)
+                    sheet.append_rows(new_rows, value_input_option='RAW')
+                    st.session_state['aguardando_confirmacao'] = False
+                    st.success(f"✅ {len(new_rows)} campanhas salvas para {data_str}!")
+
+            # Diálogo de confirmação (persiste entre re-execuções via session_state)
+            if st.session_state.get('aguardando_confirmacao'):
+                data_str = st.session_state['data_str_pendente']
+                st.warning(
+                    f"⚠️ Já existem dados salvos para **{data_str}**. "
+                    f"Deseja substituí-los pelos novos dados carregados?"
+                )
+                col_sim, col_nao, _ = st.columns([1, 1, 6])
+                with col_sim:
+                    if st.button("✅ Sim, atualizar", type="primary"):
+                        try:
+                            client2 = get_gspread_client()
+                            sheet2 = client2.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
+                            all_rows = sheet2.get_all_values()
+                            headers = all_rows[0]
+
+                            # Identifica os índices das linhas da data a substituir (1-based no Sheets)
+                            linhas_para_deletar = [
+                                i + 2  # +1 pelo header, +1 porque Sheets é 1-based
+                                for i, row in enumerate(all_rows[1:])
+                                if row and str(row[0]).strip()[:10] == data_str
+                            ]
+
+                            # Deleta de baixo para cima para não deslocar índices
+                            for idx in sorted(linhas_para_deletar, reverse=True):
+                                sheet2.delete_rows(idx)
+
+                            # Insere as novas linhas no final
+                            merged_p = st.session_state['merged_pendente']
+                            new_rows = build_new_rows(merged_p, data_str)
+                            sheet2.append_rows(new_rows, value_input_option='RAW')
+
+                            st.session_state['aguardando_confirmacao'] = False
+                            st.success(f"✅ Dados de {data_str} atualizados com sucesso! ({len(new_rows)} campanhas)")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar: {e}")
+                with col_nao:
+                    if st.button("❌ Não, cancelar"):
+                        st.session_state['aguardando_confirmacao'] = False
+                        st.info("Operação cancelada. Os dados existentes foram mantidos.")
+                        st.rerun()
         except Exception as e:
             st.error(f"Erro: {e}")
 

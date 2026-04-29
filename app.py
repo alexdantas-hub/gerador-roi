@@ -58,13 +58,30 @@ with tab1:
             df_a['core'] = (df_a['utm_campaign'].str.lower().str.strip()
                             .str.replace('"', '').str.replace(r'^[a-z]{2}', '', regex=True))
 
-            meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
+            # Converte receitas do AdX para float
             df_a['G_USD'] = (df_a['Ganhos'].astype(str)
                              .str.replace('$', '', regex=False)
                              .str.replace(',', '', regex=False)
                              .astype(float))
-            adx_g = df_a.groupby('core')['G_USD'].sum().reset_index()
 
+            # Separa linhas numéricas (ID) das linhas com nome de campanha
+            mask_numerica = df_a['utm_campaign'].str.match(r'^\d+$', na=False)
+            adx_nomes = df_a[~mask_numerica].copy()
+            adx_ids   = df_a[mask_numerica].copy()
+
+            # Cria dicionário: ID do Meta → core da campanha
+            df_m['ID_str'] = df_m['Identificação da campanha'].astype(str).str.strip()
+            id_para_core = df_m.set_index('ID_str')['core'].to_dict()
+
+            # Mapeia as linhas numéricas para o core correspondente
+            adx_ids['core'] = adx_ids['utm_campaign'].astype(str).map(id_para_core)
+            adx_ids = adx_ids.dropna(subset=['core'])  # descarta IDs sem correspondência
+
+            # Consolida: agrupa nomes + redistribui IDs somando na campanha correta
+            adx_todos = pd.concat([adx_nomes, adx_ids], ignore_index=True)
+            adx_g = adx_todos.groupby('core')['G_USD'].sum().reset_index()
+
+            meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
             merged = pd.merge(meta_g, adx_g, on='core', how='left').fillna(0)
             merged.columns = ['Campanha', 'Investimento', 'Receita (USD)']
             merged['Receita (BRL)'] = merged['Receita (USD)'] * cambio

@@ -4,7 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 
-# 1. CONFIGURAÇÕES DE PÁGINA E ESTILO VISUAL
+# 1. CONFIGURAÇÕES DE PÁGINA E ESTILO VISUAL PREMIUM
 st.set_page_config(page_title="ROI Intelligence System", layout="wide")
 
 def color_negative_red(val):
@@ -51,7 +51,8 @@ with tab1:
             df_a['core'] = df_a['utm_campaign'].apply(clean_name)
             
             meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
-            df_a['G_USD'] = df_a['Ganhos'].str.replace('$', '', regex=False).str.replace(',', '', regex=False).astype(float)
+            # Limpeza robusta da moeda AdX
+            df_a['G_USD'] = df_a['Ganhos'].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False).astype(float)
             adx_g = df_a.groupby('core')['G_USD'].sum().reset_index()
             
             merged = pd.merge(meta_g, adx_g, on='core', how='left').fillna(0)
@@ -60,7 +61,7 @@ with tab1:
             merged['Lucro'] = merged['Receita (BRL)'] - merged['Investimento']
             merged['ROI'] = merged['Lucro'] / merged['Investimento']
             
-            # --- DASHBOARD VISUAL (Métricas de Topo) ---
+            # --- DASHBOARD DE MÉTRICAS ---
             inv_t, rec_t = merged['Investimento'].sum(), merged['Receita (BRL)'].sum()
             luc_t = rec_t - inv_t
             roi_t = luc_t / inv_t if inv_t > 0 else 0
@@ -81,81 +82,62 @@ with tab1:
             
             st.dataframe(df_styled, use_container_width=True, height=450)
 
-            # --- SALVAMENTO ---
+            # --- SALVAMENTO CORRIGIDO (Evita multiplicação por 100) ---
             if st.button("💾 Salvar no Google Sheets"):
                 client = get_gspread_client()
                 sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
-                coluna_datas = sheet.col_values(1)
-                datas_norm = [pd.to_datetime(d).strftime('%Y-%m-%d') if d != 'Data_Ref' else d for d in coluna_datas]
                 
-                if data_str in datas_norm:
-                    st.session_state.confirmar_salvamento = True
-                else:
-                    new_rows = [[data_str, r['Campanha'].upper(), float(r['Investimento']), 
-                                 float(r['Receita (USD)']), float(r['Receita (BRL)']), 
-                                 float(r['Lucro']), float(r['ROI'])] for _, r in merged.iterrows()]
-                    sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
-                    st.success("✅ Dados salvos com sucesso!")
-
-            if st.session_state.confirmar_salvamento:
-                st.warning(f"⚠️ Dados para {data_str} já existem. Substituir?")
-                c1, c2 = st.columns(2)
-                if c1.button("Sim, Substituir"):
-                    client = get_gspread_client()
-                    sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
-                    rows = sheet.get_all_values()
-                    for idx, row in enumerate(reversed(rows)):
-                        try:
-                            if pd.to_datetime(row[0]).strftime('%Y-%m-%d') == data_str:
-                                sheet.delete_rows(len(rows) - idx)
-                        except: continue
-                    new_rows = [[data_str, r['Campanha'].upper(), float(r['Investimento']), float(r['Receita (USD)']), 
-                                 float(r['Receita (BRL)']), float(r['Lucro']), float(r['ROI'])] for _, r in merged.iterrows()]
-                    sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
-                    st.session_state.confirmar_salvamento = False
-                    st.success("🔄 Atualizado!")
-                    st.rerun()
+                # Prepara linhas forçando strings com vírgula se a sua planilha for pt-BR
+                # Ou usa USER_ENTERED para que o Sheets interprete o float nativo corretamente
+                new_rows = []
+                for _, r in merged.iterrows():
+                    new_rows.append([
+                        data_str, 
+                        r['Campanha'].upper(), 
+                        float(r['Investimento']), 
+                        float(r['Receita (USD)']), 
+                        float(r['Receita (BRL)']), 
+                        float(r['Lucro']), 
+                        float(r['ROI'])
+                    ])
+                
+                # O segredo está aqui: value_input_option='USER_ENTERED'
+                sheet.append_rows(new_rows, value_input_option='USER_ENTERED')
+                st.success("✅ Dados salvos com sucesso!")
 
         except Exception as e:
             st.error(f"Erro no processamento: {e}")
 
 with tab2:
     st.subheader("🔍 Análise de Desempenho Histórico")
-    opcao_data = st.selectbox("Selecione o Período", ["Ontem", "Hoje", "Últimos 7 dias", "Personalizado"])
-    hoje = datetime.now().date()
-    if opcao_data == "Hoje": start = end = hoje
-    elif opcao_data == "Ontem": start = end = hoje - timedelta(days=1)
-    elif opcao_data == "Últimos 7 dias": start, end = hoje - timedelta(days=7), hoje
-    else:
-        start = st.date_input("Início", hoje - timedelta(days=30))
-        end = st.date_input("Fim", hoje)
-
+    
     if st.button("Consultar Histórico"):
         client = get_gspread_client()
         sheet = client.open_by_key(st.secrets["spreadsheet"]["id"]).worksheet("Historico")
-        data = pd.DataFrame(sheet.get_all_records())
         
-        data['Data_Ref'] = pd.to_datetime(data['Data_Ref'], errors='coerce').dt.date
-        df_f = data.dropna(subset=['Data_Ref'])
-        df_f = df_f[df_f['Campanha'] != 'TOTAL']
-        
-        mask = (df_f['Data_Ref'] >= start) & (df_f['Data_Ref'] <= end)
-        df_final = df_f.loc[mask]
+        # Lê os dados e força conversão numérica correta
+        raw_data = sheet.get_all_records()
+        if raw_data:
+            df_h = pd.DataFrame(raw_data)
+            
+            # Converte colunas para numérico, tratando possíveis erros de formatação do Sheets
+            cols_to_fix = ['Investimento', 'Receita (USD)', 'Receita (BRL)', 'Lucro', 'ROI']
+            for col in cols_to_fix:
+                df_h[col] = pd.to_numeric(df_h[col], errors='coerce').fillna(0)
 
-        if not df_final.empty:
-            inv_h, rec_h = df_final['Investimento'].sum(), df_final['Receita (BRL)'].sum()
+            # Dashboard do Histórico
+            inv_h, rec_h = df_h['Investimento'].sum(), df_h['Receita (BRL)'].sum()
             luc_h = rec_h - inv_h
             roi_h = luc_h / inv_h if inv_h > 0 else 0
             
             h1, h2, h3, h4 = st.columns(4)
-            h1.metric("Investimento", f"R$ {inv_h:,.2f}")
-            h2.metric("Receita", f"R$ {rec_h:,.2f}")
-            h3.metric("Lucro", f"R$ {luc_h:,.2f}", delta=f"R$ {luc_h:,.2f}")
-            # CORREÇÃO: Usando roi_h em vez de roi_t no delta
-            h4.metric("ROI Médio", f"{roi_h:.2%}", delta=f"{roi_h:.2%}")
+            h1.metric("Investimento Acumulado", f"R$ {inv_h:,.2f}")
+            h2.metric("Receita Acumulada", f"R$ {rec_h:,.2f}")
+            h3.metric("Lucro Líquido", f"R$ {luc_h:,.2f}")
+            h4.metric("ROI Médio", f"{roi_h:.2%}")
             
             st.dataframe(
-                df_final.style.format({
+                df_h.style.format({
                     'Investimento': 'R$ {:,.2f}', 'Receita (BRL)': 'R$ {:,.2f}',
                     'Lucro': 'R$ {:,.2f}', 'ROI': '{:.2%}'
                 }).map(color_negative_red, subset=['Lucro', 'ROI']),

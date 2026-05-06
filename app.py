@@ -50,8 +50,9 @@ with tab1:
 
     col_u1, col_u2, col_u3 = st.columns([4, 4, 1])
     with col_u1:
-        file_meta = st.file_uploader("📁 Meta Ads", type=["csv"],
-                                     key=f"meta_{st.session_state['uploader_key']}")
+        files_meta = st.file_uploader("📁 Meta Ads (uma ou mais contas)", type=["csv"],
+                                      accept_multiple_files=True,
+                                      key=f"meta_{st.session_state['uploader_key']}")
     with col_u2:
         file_adx = st.file_uploader("📁 AdX", type=["csv"],
                                     key=f"adx_{st.session_state['uploader_key']}")
@@ -61,9 +62,22 @@ with tab1:
             st.session_state['uploader_key'] += 1
             st.rerun()
 
-    if file_meta and file_adx:
+    if files_meta and file_adx:
         try:
-            df_m = pd.read_csv(file_meta, sep=',', encoding='utf-8-sig')
+            # Consolida todos os arquivos do Meta em um único DataFrame
+            # Suporta coluna "Nome do anúncio" (por conjunto) e "Nome da campanha" (por campanha)
+            dfs_meta = []
+            for f in files_meta:
+                df_tmp = pd.read_csv(f, sep=',', encoding='utf-8-sig')
+                if 'Nome do anúncio' in df_tmp.columns:
+                    df_tmp = df_tmp.rename(columns={'Nome do anúncio': 'Nome da campanha'})
+                dfs_meta.append(df_tmp[['Nome da campanha', 'Valor usado (BRL)', 'Identificação da campanha']])
+            df_m = pd.concat(dfs_meta, ignore_index=True)
+            df_m = df_m.rename(columns={'Nome da campanha': 'Nome do anúncio'})
+
+            if len(files_meta) > 1:
+                st.info(f"📂 {len(files_meta)} arquivos do Meta consolidados — {len(df_m)} campanhas no total.")
+
             df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8-sig')
 
             df_m['core'] = (df_m['Nome do anúncio'].str.lower().str.strip()

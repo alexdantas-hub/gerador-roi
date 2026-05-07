@@ -128,13 +128,155 @@ with tab1:
             m3.metric("Lucro Líquido", f"R$ {luc_t:,.2f}")
             m4.metric("ROI Geral", f"{roi_t:.2%}")
 
-            st.dataframe(merged.style.format({
+            merged_sorted = merged.sort_values('ROI', ascending=False)
+            st.dataframe(merged_sorted.style.format({
                 'Investimento': 'R$ {:,.2f}',
                 'Receita (USD)': '$ {:,.2f}',
                 'Receita (BRL)': 'R$ {:,.2f}',
                 'Lucro': 'R$ {:,.2f}',
                 'ROI': '{:.2%}'
             }).map(color_negative_red, subset=['Lucro', 'ROI']), use_container_width=True)
+
+            # ── EXPORTAÇÃO XLSX FORMATADO ─────────────────────────────────────
+            def gerar_xlsx(df, data_ref, inv_total, rec_total, luc_total, roi_total):
+                import io
+                from openpyxl import Workbook
+                from openpyxl.styles import (PatternFill, Font, Alignment,
+                                             Border, Side, GradientFill)
+                from openpyxl.utils import get_column_letter
+
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Processamento Diário"
+
+                # Cores
+                COR_HEADER_BG  = "1E1E2E"
+                COR_HEADER_FG  = "FFFFFF"
+                COR_VERDE      = "1A7A4A"
+                COR_VERMELHO   = "C0392B"
+                COR_VERDE_BG   = "E9F7EF"
+                COR_VERM_BG    = "FDEDEC"
+                COR_TOTAL_BG   = "2C3E50"
+                COR_ALT        = "F4F6F8"
+
+                thin = Side(style='thin', color="CCCCCC")
+                borda = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+                # ── Título ──
+                ws.merge_cells("A1:G1")
+                ws["A1"] = f"ROI Intelligence System — {data_ref}"
+                ws["A1"].font = Font(bold=True, size=14, color=COR_HEADER_FG)
+                ws["A1"].fill = PatternFill("solid", fgColor=COR_HEADER_BG)
+                ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+                ws.row_dimensions[1].height = 28
+
+                # ── Subtítulo com totais ──
+                ws.merge_cells("A2:G2")
+                ws["A2"] = (f"Investimento: R$ {inv_total:,.2f}   |   "
+                            f"Receita: R$ {rec_total:,.2f}   |   "
+                            f"Lucro: R$ {luc_total:,.2f}   |   "
+                            f"ROI Geral: {roi_total:.2%}")
+                ws["A2"].font = Font(bold=True, size=10, color="FFFFFF")
+                ws["A2"].fill = PatternFill("solid", fgColor="2C3E50")
+                ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+                ws.row_dimensions[2].height = 20
+
+                # ── Cabeçalho ──
+                headers = ["Campanha", "Investimento (R$)", "Receita (USD)",
+                           "Receita (BRL)", "Lucro (R$)", "ROI"]
+                colunas_df = ["Campanha", "Investimento", "Receita (USD)",
+                              "Receita (BRL)", "Lucro", "ROI"]
+                for col_idx, h in enumerate(headers, 1):
+                    cell = ws.cell(row=3, column=col_idx, value=h)
+                    cell.font = Font(bold=True, color=COR_HEADER_FG, size=10)
+                    cell.fill = PatternFill("solid", fgColor="34495E")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    cell.border = borda
+                ws.row_dimensions[3].height = 18
+
+                # ── Dados ──
+                for row_idx, (_, row) in enumerate(df.iterrows(), 4):
+                    is_alt = (row_idx % 2 == 0)
+                    lucro_val = row["Lucro"]
+                    roi_val   = row["ROI"]
+
+                    for col_idx, col_name in enumerate(colunas_df, 1):
+                        val = row[col_name]
+                        cell = ws.cell(row=row_idx, column=col_idx)
+                        cell.border = borda
+                        cell.alignment = Alignment(horizontal="right" if col_idx > 1 else "left",
+                                                   vertical="center")
+
+                        if col_name == "Campanha":
+                            cell.value = str(val).upper()
+                            cell.font = Font(size=9, bold=True)
+                            cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
+
+                        elif col_name == "ROI":
+                            cell.value = roi_val
+                            cell.number_format = '0.00%'
+                            is_neg = roi_val < 0
+                            cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=9)
+                            cell.fill = PatternFill("solid", fgColor=COR_VERM_BG if is_neg else COR_VERDE_BG)
+
+                        elif col_name == "Lucro":
+                            cell.value = lucro_val
+                            cell.number_format = 'R$ #,##0.00'
+                            is_neg = lucro_val < 0
+                            cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=9)
+                            cell.fill = PatternFill("solid", fgColor=COR_VERM_BG if is_neg else COR_VERDE_BG)
+
+                        elif col_name == "Receita (USD)":
+                            cell.value = float(val)
+                            cell.number_format = '"$"#,##0.00'
+                            cell.font = Font(size=9)
+                            cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
+
+                        else:  # Investimento, Receita (BRL)
+                            cell.value = float(val)
+                            cell.number_format = 'R$ #,##0.00'
+                            cell.font = Font(size=9)
+                            cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
+
+                    ws.row_dimensions[row_idx].height = 16
+
+                # ── Linha de totais ──
+                tot_row = ws.max_row + 1
+                totais_vals = ["TOTAL", inv_total, None, rec_total, luc_total, roi_total]
+                totais_fmt  = [None, 'R$ #,##0.00', None, 'R$ #,##0.00', 'R$ #,##0.00', '0.00%']
+                for col_idx, (val, fmt_str) in enumerate(zip(totais_vals, totais_fmt), 1):
+                    cell = ws.cell(row=tot_row, column=col_idx, value=val)
+                    cell.font = Font(bold=True, color="FFFFFF", size=10)
+                    cell.fill = PatternFill("solid", fgColor=COR_TOTAL_BG)
+                    cell.alignment = Alignment(horizontal="right" if col_idx > 1 else "left",
+                                               vertical="center")
+                    cell.border = borda
+                    if fmt_str:
+                        cell.number_format = fmt_str
+                ws.row_dimensions[tot_row].height = 18
+
+                # ── Larguras das colunas ──
+                larguras = [38, 18, 15, 16, 16, 12]
+                for i, w in enumerate(larguras, 1):
+                    ws.column_dimensions[get_column_letter(i)].width = w
+
+                # Salva em buffer
+                buf = io.BytesIO()
+                wb.save(buf)
+                buf.seek(0)
+                return buf.getvalue()
+
+            xlsx_bytes = gerar_xlsx(
+                merged_sorted, 
+                data_referencia.strftime('%d/%m/%Y'),
+                inv_t, rec_t, luc_t, roi_t
+            )
+            st.download_button(
+                label="⬇️ Exportar XLSX",
+                data=xlsx_bytes,
+                file_name=f"roi_{data_referencia.strftime('%Y-%m-%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
             # Prepara as novas linhas para salvar (usadas tanto no save normal quanto na atualização)
             def build_new_rows(df, data_str):

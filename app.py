@@ -150,13 +150,13 @@ with tab1:
                 ws.title = "Processamento Diário"
 
                 # Cores
-                COR_HEADER_BG  = "1E1E2E"
+                COR_HEADER_BG  = "1A3A5C"
                 COR_HEADER_FG  = "FFFFFF"
                 COR_VERDE      = "1A7A4A"
                 COR_VERMELHO   = "C0392B"
                 COR_VERDE_BG   = "E9F7EF"
                 COR_VERM_BG    = "FDEDEC"
-                COR_TOTAL_BG   = "2C3E50"
+                COR_TOTAL_BG   = "1F4E79"
                 COR_ALT        = "F4F6F8"
 
                 thin = Side(style='thin', color="CCCCCC")
@@ -176,8 +176,8 @@ with tab1:
                             f"Receita: R$ {rec_total:,.2f}   |   "
                             f"Lucro: R$ {luc_total:,.2f}   |   "
                             f"ROI Geral: {roi_total:.2%}")
-                ws["A2"].font = Font(bold=True, size=10, color="FFFFFF")
-                ws["A2"].fill = PatternFill("solid", fgColor="2C3E50")
+                ws["A2"].font = Font(bold=True, size=12, color="FFFFFF")
+                ws["A2"].fill = PatternFill("solid", fgColor="1F4E79")
                 ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
                 ws.row_dimensions[2].height = 20
 
@@ -188,8 +188,8 @@ with tab1:
                               "Receita (BRL)", "Lucro", "ROI"]
                 for col_idx, h in enumerate(headers, 1):
                     cell = ws.cell(row=3, column=col_idx, value=h)
-                    cell.font = Font(bold=True, color=COR_HEADER_FG, size=10)
-                    cell.fill = PatternFill("solid", fgColor="34495E")
+                    cell.font = Font(bold=True, color=COR_HEADER_FG, size=12)
+                    cell.fill = PatternFill("solid", fgColor="2E75B6")
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                     cell.border = borda
                 ws.row_dimensions[3].height = 18
@@ -209,33 +209,33 @@ with tab1:
 
                         if col_name == "Campanha":
                             cell.value = str(val).upper()
-                            cell.font = Font(size=9, bold=True)
+                            cell.font = Font(size=12, bold=True)
                             cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
 
                         elif col_name == "ROI":
                             cell.value = roi_val
                             cell.number_format = '0.00%'
                             is_neg = roi_val < 0
-                            cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=9)
+                            cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=12)
                             cell.fill = PatternFill("solid", fgColor=COR_VERM_BG if is_neg else COR_VERDE_BG)
 
                         elif col_name == "Lucro":
                             cell.value = lucro_val
                             cell.number_format = 'R$ #,##0.00'
                             is_neg = lucro_val < 0
-                            cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=9)
+                            cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=12)
                             cell.fill = PatternFill("solid", fgColor=COR_VERM_BG if is_neg else COR_VERDE_BG)
 
                         elif col_name == "Receita (USD)":
                             cell.value = float(val)
                             cell.number_format = '"$"#,##0.00'
-                            cell.font = Font(size=9)
+                            cell.font = Font(size=12)
                             cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
 
                         else:  # Investimento, Receita (BRL)
                             cell.value = float(val)
                             cell.number_format = 'R$ #,##0.00'
-                            cell.font = Font(size=9)
+                            cell.font = Font(size=12)
                             cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
 
                     ws.row_dimensions[row_idx].height = 16
@@ -246,7 +246,7 @@ with tab1:
                 totais_fmt  = [None, 'R$ #,##0.00', None, 'R$ #,##0.00', 'R$ #,##0.00', '0.00%']
                 for col_idx, (val, fmt_str) in enumerate(zip(totais_vals, totais_fmt), 1):
                     cell = ws.cell(row=tot_row, column=col_idx, value=val)
-                    cell.font = Font(bold=True, color="FFFFFF", size=10)
+                    cell.font = Font(bold=True, color="FFFFFF", size=12)
                     cell.fill = PatternFill("solid", fgColor=COR_TOTAL_BG)
                     cell.alignment = Alignment(horizontal="right" if col_idx > 1 else "left",
                                                vertical="center")

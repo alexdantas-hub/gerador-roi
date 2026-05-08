@@ -138,7 +138,7 @@ with tab1:
             }).map(color_negative_red, subset=['Lucro', 'ROI']), use_container_width=True)
 
             # ── EXPORTAÇÃO XLSX FORMATADO ─────────────────────────────────────
-            def gerar_xlsx(df, data_ref, inv_total, rec_total, luc_total, roi_total):
+            def gerar_xlsx(df, data_ref, inv_total, usd_total, rec_total, luc_total, roi_total):
                 import io
                 from openpyxl import Workbook
                 from openpyxl.styles import (PatternFill, Font, Alignment,
@@ -242,8 +242,8 @@ with tab1:
 
                 # ── Linha de totais ──
                 tot_row = ws.max_row + 1
-                totais_vals = ["TOTAL", inv_total, None, rec_total, luc_total, roi_total]
-                totais_fmt  = [None, 'R$ #,##0.00', None, 'R$ #,##0.00', 'R$ #,##0.00', '0.00%']
+                totais_vals = ["TOTAL", inv_total, usd_total, rec_total, luc_total, roi_total]
+                totais_fmt  = [None, 'R$ #,##0.00', '"$"#,##0.00', 'R$ #,##0.00', 'R$ #,##0.00', '0.00%']
                 for col_idx, (val, fmt_str) in enumerate(zip(totais_vals, totais_fmt), 1):
                     cell = ws.cell(row=tot_row, column=col_idx, value=val)
                     cell.font = Font(bold=True, color="FFFFFF", size=12)
@@ -267,9 +267,9 @@ with tab1:
                 return buf.getvalue()
 
             xlsx_bytes = gerar_xlsx(
-                merged_sorted, 
+                merged_sorted,
                 data_referencia.strftime('%d/%m/%Y'),
-                inv_t, rec_t, luc_t, roi_t
+                inv_t, merged_sorted['Receita (USD)'].sum(), rec_t, luc_t, roi_t
             )
             st.download_button(
                 label="⬇️ Exportar XLSX",

@@ -71,6 +71,8 @@ with tab1:
                 df_tmp = pd.read_csv(f, sep=',', encoding='utf-8-sig')
                 if 'Nome do anúncio' in df_tmp.columns:
                     df_tmp = df_tmp.rename(columns={'Nome do anúncio': 'Nome da campanha'})
+                if 'Valor gasto (BRL)' in df_tmp.columns:                          # ← NOVO
+                    df_tmp = df_tmp.rename(columns={'Valor gasto (BRL)': 'Valor usado (BRL)'})   # ← NOVO
                 dfs_meta.append(df_tmp[['Nome da campanha', 'Valor usado (BRL)', 'Identificação da campanha']])
             df_m = pd.concat(dfs_meta, ignore_index=True)
             df_m = df_m.rename(columns={'Nome da campanha': 'Nome do anúncio'})

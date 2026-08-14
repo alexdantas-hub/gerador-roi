@@ -149,6 +149,17 @@ with tab1:
             merged['core'] = merged['core'].map(lambda k: nome_exibicao.get(k, k))
             merged.columns = ['Campanha', 'Investimento', 'Receita (USD)']
 
+            # ── LIMPEZA: descarta linhas sem investimento E sem receita ───
+            # Sao utm_campaign residuais do AdX (visitas soltas de campanhas
+            # antigas, lixo de tracking) que o outer join traz sem valor algum.
+            # Linhas com investimento > 0 e receita 0 permanecem: sao prejuizo real.
+            # Linhas com receita > 0 e investimento 0 permanecem: receita residual.
+            antes = len(merged)
+            merged = merged[(merged['Investimento'] > 0) | (merged['Receita (USD)'] > 0)].copy()
+            descartadas = antes - len(merged)
+            if descartadas:
+                st.caption(f"ℹ️ {descartadas} linha(s) sem investimento e sem receita foram omitidas.")
+
             merged['Receita (BRL)'] = merged['Receita (USD)'] * cambio
             merged['Lucro'] = merged['Receita (BRL)'] - merged['Investimento']
             merged['ROI'] = merged.apply(
@@ -174,7 +185,8 @@ with tab1:
                 'Receita (BRL)': 'R$ {:,.2f}',
                 'Lucro': 'R$ {:,.2f}',
                 'ROI': '{:.2%}'
-            }).map(color_negative_red, subset=['Lucro', 'ROI']), use_container_width=True)
+            }).map(color_negative_red, subset=['Lucro', 'ROI']),
+                use_container_width=True, hide_index=True)
 
             # ── EXPORTAÇÃO XLSX FORMATADO ─────────────────────────────────────
             def gerar_xlsx(df, data_ref, inv_total, usd_total, rec_total, luc_total, roi_total):

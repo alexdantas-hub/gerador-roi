@@ -42,22 +42,29 @@ def clean_numeric(val):
 
 def gerar_chave(nome):
     """
-    Chave robusta de pareamento Meta <-> AdX.
+    Chave robusta de pareamento Meta <-> AdX: o NUMERO da campanha.
 
-    Padrao dos nomes: <PREFIXO><NUMERO>.<NICHO>.<PAIS>.<DATA>
+    Padrao esperado dos nomes: <PREFIXO><NUMERO>.<NICHO>.<PAIS>.<DATA>
         AD162.BIENESTAR.MEX.13/08/2026
         ca162.BIENESTARQUIZ.MEX.13/08/2026
 
-    O token do NICHO e ignorado de proposito: e o campo que na pratica
-    diverge entre as duas plataformas (bienestar vs bienestarquiz).
-    A chave final vira '162.mex.13/08/2026'.
+    Nicho, pais e data NAO entram na chave porque divergem entre as
+    plataformas na pratica:
+      - nicho:  bienestar  vs  bienestarquiz
+      - nome truncado no Meta: 'AD164' (sem nicho/pais/data)
+      - data URL-encodada no AdX: '192f082f2026' (%2F -> 2f)
+    O numero da campanha ja e o identificador unico, entao a chave de
+    'AD164' e de 'ad164.anses.arg.26/04/2026' vira '164' nos dois lados.
+
+    IDs longos do Meta (> 6 digitos) sao preservados inteiros para que o
+    mapa de IDs (id_para_core) resolva a linha.
     """
-    s = str(nome).lower().strip().replace('"', '')
-    s = re.sub(r'^[a-z]+', '', s)          # remove prefixo alfabetico (ad, ca, cad...)
-    p = s.split('.')
-    if len(p) >= 4:                        # numero . nicho . pais . data
-        return f"{p[0]}.{p[2]}.{'.'.join(p[3:])}"
-    return s                               # formato desconhecido: mantem como esta
+    s = str(nome).lower().strip().replace('"', '').replace('%2f', '/')
+    s = re.sub(r'^[a-z]+[\W_]*', '', s)     # remove prefixo alfabetico (ad, ca, cad, gp_...)
+    m = re.match(r'^(\d+)', s)
+    if m and len(m.group(1)) <= 6:          # numero de campanha
+        return m.group(1)
+    return s                                # ID longo ou formato desconhecido
 
 
 st.title("📊 ROI Intelligence System")
@@ -112,6 +119,22 @@ with tab1:
             df_m['core'] = df_m['Nome do anúncio'].map(gerar_chave)
             df_a['core'] = df_a['utm_campaign'].map(gerar_chave)
 
+            # ── AUDITORIA: numeros de campanha repetidos no mesmo arquivo ─
+            # Como a chave e apenas o numero, dois anuncios diferentes com o
+            # mesmo numero (ex.: AD164 para ARG e AD164 para MEX no mesmo dia)
+            # seriam somados na mesma linha. Avisa se isso acontecer.
+            dup = (df_m.groupby('core')['Nome do anúncio']
+                   .nunique().reset_index(name='n'))
+            dup = dup[dup['n'] > 1]
+            if not dup.empty:
+                nomes_dup = (df_m[df_m['core'].isin(dup['core'])]
+                             .sort_values('core')[['core', 'Nome do anúncio']])
+                st.warning(
+                    "⚠️ Números de campanha repetidos no Meta — estas linhas "
+                    "serão somadas na mesma chave de pareamento:"
+                )
+                st.dataframe(nomes_dup, use_container_width=True, hide_index=True)
+
             # Nome original do Meta, para exibir na planilha em vez da chave crua
             nome_exibicao = df_m.groupby('core')['Nome do anúncio'].first().to_dict()
 
@@ -124,8 +147,7 @@ with tab1:
             # Linhas numéricas (ID da campanha) → chave via mapa de IDs do Meta
             df_m['ID_str'] = df_m['Identificação da campanha'].astype(str).str.strip()
             id_para_core = df_m.set_index('ID_str')['core'].to_dict()
-
-            mask_numerica = df_a['utm_campaign'].astype(str).str.match(r'^\d+$', na=False)
+            mask_numerica = df_a['utm_campaign'].astype(str).str.match(r'^\d{7,}$', na=False)
             df_a.loc[mask_numerica, 'core'] = (df_a.loc[mask_numerica, 'utm_campaign']
                                                .astype(str).str.strip().map(id_para_core))
 
@@ -144,7 +166,6 @@ with tab1:
             # ── AGREGAÇÃO E JUNÇÃO ───────────────────────────────────────
             adx_g = df_a.dropna(subset=['core']).groupby('core')['G_USD'].sum().reset_index()
             meta_g = df_m.groupby('core')['Valor usado (BRL)'].sum().reset_index()
-
             merged = pd.merge(meta_g, adx_g, on='core', how='outer').fillna(0)
             merged['core'] = merged['core'].map(lambda k: nome_exibicao.get(k, k))
             merged.columns = ['Campanha', 'Investimento', 'Receita (USD)']
@@ -263,23 +284,27 @@ with tab1:
                             cell.value = str(val).upper()
                             cell.font = Font(size=12, bold=True)
                             cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
+
                         elif col_name == "ROI":
                             cell.value = roi_val
                             cell.number_format = '0.00%'
                             is_neg = roi_val < 0
                             cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=12)
                             cell.fill = PatternFill("solid", fgColor=COR_VERM_BG if is_neg else COR_VERDE_BG)
+
                         elif col_name == "Lucro":
                             cell.value = lucro_val
                             cell.number_format = 'R$ #,##0.00'
                             is_neg = lucro_val < 0
                             cell.font = Font(bold=True, color=COR_VERMELHO if is_neg else COR_VERDE, size=12)
                             cell.fill = PatternFill("solid", fgColor=COR_VERM_BG if is_neg else COR_VERDE_BG)
+
                         elif col_name == "Receita (USD)":
                             cell.value = float(val)
                             cell.number_format = '"$"#,##0.00'
                             cell.font = Font(size=12)
                             cell.fill = PatternFill("solid", fgColor=COR_ALT if is_alt else "FFFFFF")
+
                         else:  # Investimento, Receita (BRL)
                             cell.value = float(val)
                             cell.number_format = 'R$ #,##0.00'

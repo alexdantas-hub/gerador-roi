@@ -9,6 +9,9 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="ROI Intelligence System", layout="wide")
 
+# Rotulo da linha que agrega toda a receita do AdX sem investimento no dia.
+LINHA_RESIDUAL = "RECEITA RESIDUAL (SEM INVESTIMENTO)"
+
 
 def color_negative_red(val):
     if isinstance(val, (int, float)):
@@ -207,16 +210,40 @@ with tab1:
             merged['core'] = merged['core'].map(lambda k: nome_exibicao.get(k, k))
             merged.columns = ['Campanha', 'Investimento', 'Receita (USD)']
 
-            # ── LIMPEZA: descarta linhas sem investimento E sem receita ───
-            # Sao utm_campaign residuais do AdX (visitas soltas de campanhas
-            # antigas, lixo de tracking) que o outer join traz sem valor algum.
-            # Linhas com investimento > 0 e receita 0 permanecem: sao prejuizo real.
-            # Linhas com receita > 0 e investimento 0 permanecem: receita residual.
-            antes = len(merged)
-            merged = merged[(merged['Investimento'] > 0) | (merged['Receita (USD)'] > 0)].copy()
-            descartadas = antes - len(merged)
-            if descartadas:
-                st.caption(f"ℹ️ {descartadas} linha(s) sem investimento e sem receita foram omitidas.")
+            # ── CONSOLIDACAO DA RECEITA RESIDUAL ──────────────────────────
+            # Linhas com investimento 0 sao receita do AdX sem custo do dia:
+            # visitas soltas de campanhas antigas ja pausadas, trafego organico
+            # residual, lixo de tracking. Uma a uma, poluem o painel. Em vez de
+            # descarta-las (o que faria o total divergir do AdX), todas viram
+            # UMA linha agregada, fixada no fim da tabela.
+            sem_inv = merged[merged['Investimento'] <= 0].copy()
+            merged = merged[merged['Investimento'] > 0].copy()
+
+            n_residuais = len(sem_inv)
+            usd_residual = float(sem_inv['Receita (USD)'].sum())
+
+            if usd_residual > 0:
+                merged = pd.concat([
+                    merged,
+                    pd.DataFrame([{
+                        'Campanha': LINHA_RESIDUAL,
+                        'Investimento': 0.0,
+                        'Receita (USD)': usd_residual
+                    }])
+                ], ignore_index=True)
+                st.caption(
+                    f"ℹ️ {n_residuais} linha(s) sem investimento foram agrupadas em "
+                    f"**{LINHA_RESIDUAL}** (R$ {usd_residual * cambio:,.2f}). "
+                    f"Elas entram na receita total para bater com o AdX, mas não têm ROI."
+                )
+                with st.expander(f"🔎 Detalhe das {n_residuais} linha(s) residuais"):
+                    st.dataframe(
+                        sem_inv.assign(**{'Receita (BRL)': sem_inv['Receita (USD)'] * cambio})
+                        [['Campanha', 'Receita (USD)', 'Receita (BRL)']]
+                        .sort_values('Receita (USD)', ascending=False)
+                        .style.format({'Receita (USD)': '$ {:,.2f}', 'Receita (BRL)': 'R$ {:,.2f}'}),
+                        use_container_width=True, hide_index=True
+                    )
 
             merged['Receita (BRL)'] = merged['Receita (USD)'] * cambio
             merged['Lucro'] = merged['Receita (BRL)'] - merged['Investimento']
@@ -224,10 +251,18 @@ with tab1:
                 lambda r: r['Lucro'] / r['Investimento'] if r['Investimento'] > 0 else 0, axis=1
             )
 
+            # Totais gerais: incluem a receita residual, para reconciliar com o AdX.
             inv_t = merged['Investimento'].sum()
             rec_t = merged['Receita (BRL)'].sum()
             luc_t = rec_t - inv_t
             roi_t = luc_t / inv_t if inv_t > 0 else 0
+
+            # Totais so das campanhas com investimento: e este o ROI analitico,
+            # sem a receita residual inflando o indicador.
+            com_inv = merged[merged['Investimento'] > 0]
+            rec_ci = com_inv['Receita (BRL)'].sum()
+            luc_ci = rec_ci - inv_t
+            roi_ci = luc_ci / inv_t if inv_t > 0 else 0
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Investimento Total", f"R$ {inv_t:,.2f}")
@@ -235,15 +270,32 @@ with tab1:
             m3.metric("Lucro Líquido", f"R$ {luc_t:,.2f}")
             m4.metric("ROI Geral", f"{roi_t:.2%}")
 
-            merged_sorted = merged.sort_values('ROI', ascending=False)
+            if usd_residual > 0:
+                st.caption(
+                    f"Somente campanhas com investimento: receita R$ {rec_ci:,.2f} · "
+                    f"lucro R$ {luc_ci:,.2f} · **ROI {roi_ci:.2%}**"
+                )
+
+            # Ordena por ROI, mas mantem a linha residual sempre no fim.
+            merged_sorted = (merged
+                             .assign(_fim=(merged['Campanha'] == LINHA_RESIDUAL).astype(int))
+                             .sort_values(['_fim', 'ROI'], ascending=[True, False])
+                             .drop(columns='_fim'))
+
+            def estilo_residual(row):
+                """Linha agregada de receita residual: cinza e neutra, sem cor de ROI."""
+                if row['Campanha'] == LINHA_RESIDUAL:
+                    return ['color: #8a8a8a; font-style: italic'] * len(row)
+                return [''] * len(row)
 
             st.dataframe(merged_sorted.style.format({
                 'Investimento': 'R$ {:,.2f}',
                 'Receita (USD)': '$ {:,.2f}',
                 'Receita (BRL)': 'R$ {:,.2f}',
                 'Lucro': 'R$ {:,.2f}',
-                'ROI': '{:.2%}'
-            }).map(color_negative_red, subset=['Lucro', 'ROI']),
+                'ROI': lambda v: '—' if pd.isna(v) else f'{v:.2%}'
+            }).map(color_negative_red, subset=['Lucro', 'ROI'])
+                .apply(estilo_residual, axis=1),
                 use_container_width=True, hide_index=True)
 
             # ── EXPORTAÇÃO XLSX FORMATADO ─────────────────────────────────────
@@ -305,10 +357,33 @@ with tab1:
                 ws.row_dimensions[3].height = 18
 
                 # ── Dados ──
+                COR_RESIDUAL_BG = "EFEFEF"
+                COR_RESIDUAL_FG = "6B6B6B"
+
                 for row_idx, (_, row) in enumerate(df.iterrows(), 4):
                     is_alt = (row_idx % 2 == 0)
                     lucro_val = row["Lucro"]
                     roi_val   = row["ROI"]
+                    is_residual = (str(row["Campanha"]).upper() == LINHA_RESIDUAL)
+
+                    # Linha agregada de receita residual: cinza, neutra, sem ROI.
+                    if is_residual:
+                        vals = [str(row["Campanha"]).upper(), None, float(row["Receita (USD)"]),
+                                float(row["Receita (BRL)"]), float(lucro_val), None]
+                        fmts = [None, None, '"$"#,##0.00', 'R$ #,##0.00', 'R$ #,##0.00', None]
+                        for col_idx, (v, fmt_str) in enumerate(zip(vals, fmts), 1):
+                            cell = ws.cell(row=row_idx, column=col_idx,
+                                           value=v if v is not None else "—")
+                            cell.border = borda
+                            cell.alignment = Alignment(horizontal="right" if col_idx > 1 else "left",
+                                                       vertical="center")
+                            cell.font = Font(size=12, italic=True, color=COR_RESIDUAL_FG,
+                                             bold=(col_idx == 1))
+                            cell.fill = PatternFill("solid", fgColor=COR_RESIDUAL_BG)
+                            if fmt_str:
+                                cell.number_format = fmt_str
+                        ws.row_dimensions[row_idx].height = 16
+                        continue
 
                     for col_idx, col_name in enumerate(colunas_df, 1):
                         val = row[col_name]

@@ -40,6 +40,11 @@ def clean_numeric(val):
         return 0.0
 
 
+def tem_numero(chave):
+    """True se a chave gerada e um numero de campanha utilizavel (<= 6 digitos)."""
+    return bool(re.match(r'^\d{1,6}$', str(chave)))
+
+
 def gerar_chave(nome):
     """
     Chave robusta de pareamento Meta <-> AdX: o NUMERO da campanha.
@@ -96,47 +101,79 @@ with tab1:
 
     if files_meta and file_adx:
         try:
-            # Consolida todos os arquivos do Meta em um único DataFrame
-            # Suporta coluna "Nome do anúncio" (por conjunto) e "Nome da campanha" (por campanha)
+            # Consolida todos os arquivos do Meta em um único DataFrame.
+            # "Nome da campanha" e a coluna de EXIBICAO (painel e XLSX).
+            # "Nome do anúncio" e mantido apenas como fallback de nome e de chave,
+            # para exports por conjunto/anuncio que nao trazem o nome da campanha.
             dfs_meta = []
+            faltou_nome_campanha = False
             for f in files_meta:
                 df_tmp = pd.read_csv(f, sep=',', encoding='utf-8-sig')
-                if 'Nome do anúncio' in df_tmp.columns:
-                    df_tmp = df_tmp.rename(columns={'Nome do anúncio': 'Nome da campanha'})
                 if 'Valor gasto (BRL)' in df_tmp.columns:
                     df_tmp = df_tmp.rename(columns={'Valor gasto (BRL)': 'Valor usado (BRL)'})
-                dfs_meta.append(df_tmp[['Nome da campanha', 'Valor usado (BRL)', 'Identificação da campanha']])
+
+                tem_camp = 'Nome da campanha' in df_tmp.columns
+                tem_anun = 'Nome do anúncio' in df_tmp.columns
+                if not tem_camp and not tem_anun:
+                    raise ValueError(
+                        f"O arquivo '{getattr(f, 'name', 'Meta')}' não tem nem a coluna "
+                        f"'Nome da campanha' nem 'Nome do anúncio'."
+                    )
+                if not tem_camp:
+                    faltou_nome_campanha = True
+                    df_tmp['Nome da campanha'] = df_tmp['Nome do anúncio']
+                if not tem_anun:
+                    df_tmp['Nome do anúncio'] = df_tmp['Nome da campanha']
+
+                dfs_meta.append(df_tmp[['Nome da campanha', 'Nome do anúncio',
+                                        'Valor usado (BRL)', 'Identificação da campanha']])
 
             df_m = pd.concat(dfs_meta, ignore_index=True)
-            df_m = df_m.rename(columns={'Nome da campanha': 'Nome do anúncio'})
+
+            if faltou_nome_campanha:
+                st.info(
+                    "ℹ️ Pelo menos um arquivo do Meta não tem a coluna **Nome da campanha** — "
+                    "nessas linhas o painel exibe o nome do anúncio. Para ver o nome da campanha, "
+                    "adicione essa coluna na exportação do Gerenciador de Anúncios."
+                )
 
             if len(files_meta) > 1:
-                st.info(f"📂 {len(files_meta)} arquivos do Meta consolidados — {len(df_m)} campanhas no total.")
+                st.info(f"📂 {len(files_meta)} arquivos do Meta consolidados — {len(df_m)} linhas no total.")
 
             df_a = pd.read_csv(file_adx, sep=';', encoding='utf-8-sig')
 
             # ── CHAVES DE PAREAMENTO ──────────────────────────────────────
-            df_m['core'] = df_m['Nome do anúncio'].map(gerar_chave)
+            # A chave sai do nome da campanha; se ele nao render um numero
+            # utilizavel, cai para o nome do anuncio.
+            def chave_meta(row):
+                k = gerar_chave(row['Nome da campanha'])
+                if tem_numero(k):
+                    return k
+                k2 = gerar_chave(row['Nome do anúncio'])
+                return k2 if tem_numero(k2) else k
+
+            df_m['core'] = df_m.apply(chave_meta, axis=1)
             df_a['core'] = df_a['utm_campaign'].map(gerar_chave)
 
             # ── AUDITORIA: numeros de campanha repetidos no mesmo arquivo ─
-            # Como a chave e apenas o numero, dois anuncios diferentes com o
-            # mesmo numero (ex.: AD164 para ARG e AD164 para MEX no mesmo dia)
-            # seriam somados na mesma linha. Avisa se isso acontecer.
-            dup = (df_m.groupby('core')['Nome do anúncio']
+            # Como a chave e apenas o numero, duas campanhas diferentes com o
+            # mesmo numero (ex.: 164 para ARG e 164 para MEX no mesmo dia)
+            # seriam somadas na mesma linha. Avisa se isso acontecer.
+            dup = (df_m.groupby('core')['Nome da campanha']
                    .nunique().reset_index(name='n'))
             dup = dup[dup['n'] > 1]
             if not dup.empty:
                 nomes_dup = (df_m[df_m['core'].isin(dup['core'])]
-                             .sort_values('core')[['core', 'Nome do anúncio']])
+                             .sort_values('core')[['core', 'Nome da campanha', 'Nome do anúncio']])
                 st.warning(
                     "⚠️ Números de campanha repetidos no Meta — estas linhas "
                     "serão somadas na mesma chave de pareamento:"
                 )
                 st.dataframe(nomes_dup, use_container_width=True, hide_index=True)
 
-            # Nome original do Meta, para exibir na planilha em vez da chave crua
-            nome_exibicao = df_m.groupby('core')['Nome do anúncio'].first().to_dict()
+            # Nome da campanha, para exibir no painel/XLSX em vez da chave crua.
+            # Vários anúncios da mesma campanha compartilham o mesmo nome.
+            nome_exibicao = df_m.groupby('core')['Nome da campanha'].first().to_dict()
 
             # Converte receitas do AdX para float
             df_a['G_USD'] = (df_a['Ganhos'].astype(str)
